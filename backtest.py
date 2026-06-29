@@ -1,9 +1,8 @@
-# backtest.py — Backtesting Standalone com Dados da Binance US
+# backtest.py — Backtesting Standalone com múltiplas fontes de dados
 # Krypton TradeBot | Estratégia: Supertrend + RSI + MACD Filter
 #
-# Usa a API pública da Binance US (sem autenticação) para baixar dados históricos.
-# A API global da Binance (api.binance.com) pode ser bloqueada dependendo da região —
-# a Binance US (api.binance.us) não tem essa restrição geográfica.
+# Baixa dados históricos primeiro pela Binance Global, depois Binance US e,
+# se necessário, usa Yahoo Finance como fallback. A estratégia do bot não foi alterada.
 #
 # Uso:
 #   python backtest.py --symbol SOLUSDT --start 2022-01-01 --end 2026-06-01
@@ -17,6 +16,7 @@ from datetime import datetime, date
 import numpy as np
 import pandas as pd
 import requests
+import yfinance as yf
 
 from config import (
     FEE_RATE,
@@ -33,48 +33,79 @@ from config import (
 )
 from indicators import compute_atr, compute_signals
 
-# Mapeamento Binance global → Binance US
-SYMBOL_MAP = {
+
+BINANCE_GLOBAL_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_US_URL = "https://api.binance.us/api/v3/klines"
+
+# Binance US usa pares USD em alguns ativos. Binance Global usa USDT.
+BINANCE_US_SYMBOL_MAP = {
     "SOLUSDT": "SOLUSD",
     "BTCUSDT": "BTCUSD",
     "ETHUSDT": "ETHUSD",
     "BNBUSDT": "BNBUSD",
 }
 
-BINANCE_US_URL = "https://api.binance.us/api/v3/klines"
+YAHOO_SYMBOL_MAP = {
+    "SOLUSDT": "SOL-USD",
+    "BTCUSDT": "BTC-USD",
+    "ETHUSDT": "ETH-USD",
+    "BNBUSDT": "BNB-USD",
+}
 
 
-def get_ohlcv_binance_us(symbol: str, start_str: str, end_str: str | None = None) -> pd.DataFrame:
+def _date_to_ms(value: str) -> int:
+    return int(datetime.strptime(value, "%Y-%m-%d").timestamp() * 1000)
+
+
+def _klines_to_df(klines: list) -> pd.DataFrame:
+    if not klines:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(
+        klines,
+        columns=[
+            "open_time", "open", "high", "low", "close", "volume",
+            "close_time", "quote_vol", "trades", "taker_base", "taker_quote", "ignore",
+        ],
+    )
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df.set_index("open_time", inplace=True)
+
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = df[col].astype(float)
+
+    return df[["open", "high", "low", "close", "volume"]]
+
+
+def get_ohlcv_binance(symbol: str, start_str: str, end_str: str | None, base_url: str, symbol_map: dict | None = None) -> pd.DataFrame:
     """
-    Baixa dados históricos OHLCV da Binance US (API pública, sem autenticação).
-
-    Busca em lotes de 1000 candles para cobrir períodos longos.
-    Sem restrição geográfica.
+    Baixa OHLCV pela API pública da Binance/Binance US em lotes de 1000 candles.
     """
-    symbol_us = SYMBOL_MAP.get(symbol.upper(), symbol)
-    start_ts  = int(datetime.strptime(start_str, "%Y-%m-%d").timestamp() * 1000)
-    end_ts    = int(datetime.strptime(end_str,   "%Y-%m-%d").timestamp() * 1000) if end_str else None
+    symbol_api = symbol_map.get(symbol.upper(), symbol.upper()) if symbol_map else symbol.upper()
+    start_ts = _date_to_ms(start_str)
+    end_ts = _date_to_ms(end_str) if end_str else None
 
-    all_klines  = []
-    current_ts  = start_ts
+    all_klines = []
+    current_ts = start_ts
 
     while True:
         params = {
-            "symbol"   : symbol_us,
-            "interval" : "1d",
+            "symbol": symbol_api,
+            "interval": "1d",
             "startTime": current_ts,
-            "limit"    : 1000,
+            "limit": 1000,
         }
         if end_ts:
             params["endTime"] = end_ts
 
         try:
-            r      = requests.get(BINANCE_US_URL, params=params, timeout=15)
-            klines = r.json()
-        except Exception as e:
-            print(f"  Erro ao buscar dados: {e}. Tentando novamente em 5s...")
-            time.sleep(5)
-            continue
+            response = requests.get(base_url, params=params, timeout=15)
+            if response.status_code != 200:
+                break
+            klines = response.json()
+        except Exception:
+            time.sleep(2)
+            break
 
         if not klines or isinstance(klines, dict):
             break
@@ -84,25 +115,87 @@ def get_ohlcv_binance_us(symbol: str, start_str: str, end_str: str | None = None
         if len(klines) < 1000:
             break
 
-        current_ts = klines[-1][0] + 86_400_000  # avança 1 dia em ms
+        current_ts = klines[-1][0] + 86_400_000
         if end_ts and current_ts >= end_ts:
             break
 
-    if not all_klines:
+        time.sleep(0.2)
+
+    return _klines_to_df(all_klines)
+
+
+def get_ohlcv_yahoo(symbol: str, start_str: str, end_str: str | None = None) -> pd.DataFrame:
+    """
+    Fallback via Yahoo Finance para períodos em que Binance US não possui candles.
+    """
+    yf_symbol = YAHOO_SYMBOL_MAP.get(symbol.upper())
+    if not yf_symbol:
         return pd.DataFrame()
 
-    df = pd.DataFrame(
-        all_klines,
-        columns=[
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "quote_vol", "trades", "taker_base", "taker_quote", "ignore",
-        ],
+    try:
+        df = yf.download(
+            yf_symbol,
+            start=start_str,
+            end=end_str,
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df.rename(
+        columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }
     )
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
-    df.set_index("open_time", inplace=True)
-    for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = df[col].astype(float)
-    return df[["open", "high", "low", "close", "volume"]]
+
+    required_cols = ["open", "high", "low", "close", "volume"]
+    if not all(col in df.columns for col in required_cols):
+        return pd.DataFrame()
+
+    df.index = pd.to_datetime(df.index)
+    return df[required_cols].dropna()
+
+
+def get_ohlcv(symbol: str, start_str: str, end_str: str | None = None) -> tuple[pd.DataFrame, str]:
+    """
+    Busca dados em múltiplas fontes sem alterar a estratégia do backtest.
+    """
+    sources = [
+        ("Binance Global", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_GLOBAL_URL)),
+        ("Binance US", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_US_URL, BINANCE_US_SYMBOL_MAP)),
+        ("Yahoo Finance", lambda: get_ohlcv_yahoo(symbol, start_str, end_str)),
+    ]
+
+    best_df = pd.DataFrame()
+    best_source = "nenhuma fonte"
+
+    for source_name, loader in sources:
+        print(f"\n  Tentando {source_name}...", end=" ", flush=True)
+        df = loader()
+        if len(df) > len(best_df):
+            best_df = df
+            best_source = source_name
+
+        if len(df) >= 50:
+            print(f"✓ {len(df)} candles")
+            return df, source_name
+
+        print(f"{len(df)} candles")
+
+    return best_df, best_source
 
 
 def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
@@ -120,14 +213,15 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
     print(f"KRYPTON BACKTEST: {symbol}")
     print(f"Período: {start} → {end or 'hoje'}")
     print(f"{'='*60}")
-    print("Baixando dados históricos via Binance US...", end=" ", flush=True)
+    print("Baixando dados históricos...", flush=True)
 
-    df = get_ohlcv_binance_us(symbol, start, end)
+    df, data_source = get_ohlcv(symbol, start, end)
 
     if len(df) < 50:
         print(f"\n❌ Dados insuficientes ({len(df)} candles). Verifique o símbolo e as datas.")
         return {}
 
+    print(f"\nFonte usada: {data_source}")
     print(f"✓ {len(df)} candles carregados.")
     print(f"  {df.index[0].date()} → {df.index[-1].date()}")
 
@@ -231,6 +325,7 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
         "symbol"        : symbol,
         "start"         : start,
         "end"           : end or str(date.today()),
+        "data_source"   : data_source,
         "n_candles"     : len(df),
         "n_trades"      : len(trades),
         "return_total"  : ret,
@@ -247,7 +342,7 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Krypton TradeBot — Backtest Standalone (Binance US API)",
+        description="Krypton TradeBot — Backtest Standalone",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos:
