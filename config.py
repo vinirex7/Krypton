@@ -16,11 +16,12 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
 # ─── Pares de Trading & Alocação de Capital ───────────────────────────────────
 # Alocação baseada no backtest: SOL lidera por maior alpha (+91,6 p.p. vs B&H)
+# Moeda base: U (United Stables — stablecoin nativa da Binance)
 TRADING_PAIRS = {
-    "SOLUSDT": 0.25,   # 25% do capital — par primário (melhor performance)
-    "BTCUSDT": 0.40,   # 40% do capital — maior liquidez, menor risco
-    "ETHUSDT": 0.20,   # 20% do capital
-    "BNBUSDT": 0.15,   # 15% do capital
+    "SOLU": 0.25,   # 25% do capital — par primário (melhor performance)
+    "BTCU": 0.40,   # 40% do capital — maior liquidez, menor risco
+    "ETHU": 0.20,   # 20% do capital
+    "BNBU": 0.15,   # 15% do capital
 }
 
 # ─── Parâmetros da Estratégia (Otimizados via Grid Search — 1.612 dias) ───────

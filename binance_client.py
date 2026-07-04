@@ -38,7 +38,7 @@ logger = logging.getLogger("Krypton.Binance")
 # Constantes de retry
 MAX_RETRIES  = 3
 RETRY_DELAY  = 5  # segundos entre tentativas
-MIN_NOTIONAL_ROUND_UP_THRESHOLD = 8.00  # USDT: compra entre 8 e o mínimo da Binance sobe para o mínimo
+MIN_NOTIONAL_ROUND_UP_THRESHOLD = 8.00  # U: compra entre 8 e o mínimo da Binance sobe para o mínimo
 
 
 class BinanceInterface:
@@ -72,7 +72,7 @@ class BinanceInterface:
 
         Parâmetros
         ----------
-        symbol   : str  — Par de trading (ex: 'SOLUSDT')
+        symbol   : str  — Par de trading (ex: 'SOLU')
         interval : str  — Timeframe (padrão: '1d')
         limit    : int  — Número de candles (padrão: 300)
 
@@ -122,7 +122,7 @@ class BinanceInterface:
             ),
         }
 
-    def get_account_balance(self, asset: str = "USDT") -> float:
+    def get_account_balance(self, asset: str = "U") -> float:
         """Retorna saldo disponível (free) do ativo especificado."""
         balances = self.client.get_account()["balances"]
         for b in balances:

@@ -55,7 +55,7 @@ class TradeBot:
     Verifica SL/TP em tempo real a cada 5 minutos.
 
     Performance (backtest Jan/2022 – Mai/2026):
-      Retorno Total : +37,7% (SOLUSDT)
+      Retorno Total : +37,7% (SOLU)
       Sharpe Ratio  : 0,932
       Max Drawdown  : -5,0%
       Win Rate      : 54,0%
@@ -73,13 +73,13 @@ class TradeBot:
 
     def _initialize(self) -> None:
         """Inicializa capital, symbol_infos e RiskManager."""
-        usdt_balance = self.binance.get_account_balance("USDT")
+        u_balance = self.binance.get_account_balance("U")
         for sym in TRADING_PAIRS:
             self.symbol_infos[sym] = self.binance.get_symbol_info(sym)
-        self.risk_manager = RiskManager(initial_capital=usdt_balance)
+        self.risk_manager = RiskManager(initial_capital=u_balance)
         logger.info(
             f"🟢 Krypton TradeBot inicializado | "
-            f"Capital: ${usdt_balance:,.2f} USDT | "
+            f"Capital: ${u_balance:,.2f} U | "
             f"Modo: {'TESTNET ⚠️' if USE_TESTNET else 'PRODUÇÃO 🔴'}"
         )
 
@@ -87,17 +87,17 @@ class TradeBot:
 
     def _get_current_capital(self) -> float:
         """
-        Calcula capital total: USDT livre + valor mark-to-market das posições abertas.
+        Calcula capital total: U livre + valor mark-to-market das posições abertas.
         """
-        usdt = self.binance.get_account_balance("USDT")
+        u_balance = self.binance.get_account_balance("U")
         for sym, pos in self.positions.items():
             price = self.binance.get_current_price(sym)
             if pos["side"] == "LONG":
                 pnl = pos["quantity"] * (price - pos["entry_price"])
             else:
                 pnl = pos["quantity"] * (pos["entry_price"] - price)
-            usdt += pos["quantity"] * pos["entry_price"] + pnl
-        return usdt
+            u_balance += pos["quantity"] * pos["entry_price"] + pnl
+        return u_balance
 
     # ─── Gerenciamento de Posições ────────────────────────────────────────────
 
@@ -221,7 +221,7 @@ class TradeBot:
         )
 
         current_capital = self._get_current_capital()
-        logger.info(f"💰 Capital atual: ${current_capital:,.2f} USDT")
+        logger.info(f"💰 Capital atual: ${current_capital:,.2f} U")
         logger.info(f"📊 {self.risk_manager.status(current_capital)}")
 
         # Passo 1: Verificar SL/TP antes de qualquer decisão
