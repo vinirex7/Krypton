@@ -95,27 +95,13 @@ class BinanceInterface:
         precision = self._step_precision(step)
         return round(math.floor(qty / step) * step, precision)
 
-    def _ceil_step(self, qty: float, step: float) -> float:
-        if step <= 0:
-            return qty
-        precision = self._step_precision(step)
-        return round(math.ceil(qty / step) * step, precision)
-
     def _round_tick(self, price: float, tick: float) -> float:
         if tick <= 0:
             return price
         precision = self._step_precision(tick)
         return round(round(price / tick) * tick, precision)
 
-    def place_limit_order(
-        self,
-        symbol: str,
-        side: str,
-        quantity: float,
-        price: float,
-        symbol_info: dict,
-        reference_price: float | None = None,
-    ) -> dict | None:
+    def place_limit_order(self, symbol: str, side: str, quantity: float, price: float, symbol_info: dict, reference_price: float | None = None) -> dict | None:
         """Envia LIMIT e valida slippage contra o preço do sinal, não contra um mid recém-buscado."""
         side = side.upper()
         if reference_price is not None and reference_price > 0:
@@ -130,12 +116,8 @@ class BinanceInterface:
         qty = self._round_step(quantity, symbol_info["step_size"])
         rounded_price = self._round_tick(price, symbol_info["tick_size"])
         notional = qty * rounded_price
-        min_notional = symbol_info["min_notional"]
-        if qty <= 0 or notional < min_notional:
-            logger.warning(
-                "Ordem %s rejeitada | %s | notional %.8f < mínimo %.8f",
-                side, symbol, notional, min_notional,
-            )
+        if qty <= 0 or notional < symbol_info["min_notional"]:
+            logger.warning("Ordem %s rejeitada | %s | notional %.8f < mínimo %.8f", side, symbol, notional, symbol_info["min_notional"])
             return None
 
         try:
@@ -154,7 +136,7 @@ class BinanceInterface:
             return None
 
     def wait_for_fill(self, symbol: str, order_id: int, timeout_sec: int = ENTRY_FILL_TIMEOUT_SEC) -> dict | None:
-        """Só considera posição criada depois de status FILLED; timeout cancela a ordem."""
+        """Só considera posição após fill; timeout cancela e preserva fills parciais."""
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
             try:
@@ -163,7 +145,8 @@ class BinanceInterface:
                 if status == "FILLED":
                     return order
                 if status in {"CANCELED", "REJECTED", "EXPIRED"}:
-                    return None
+                    executed = float(order.get("executedQty", 0))
+                    return order if executed > 0 else None
             except BinanceAPIException as exc:
                 logger.warning("get_order %s/%s falhou: %s", symbol, order_id, exc)
             time.sleep(ORDER_POLL_SEC)
@@ -172,7 +155,11 @@ class BinanceInterface:
             order = self.client.get_order(symbol=symbol, orderId=order_id)
             if order.get("status") != "FILLED":
                 self.cancel_order(symbol, order_id)
-                return None
+                # Reconciliar imediatamente: a ordem pode ter tido fill parcial antes do cancel.
+                order = self.client.get_order(symbol=symbol, orderId=order_id)
+                self.get_open_orders(symbol)
+                executed = float(order.get("executedQty", 0))
+                return order if executed > 0 else None
             return order
         except BinanceAPIException as exc:
             logger.error("Falha final ao reconciliar ordem %s/%s: %s", symbol, order_id, exc)
