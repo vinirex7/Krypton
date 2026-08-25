@@ -1,23 +1,18 @@
-# backtest.py — Backtesting Standalone com múltiplas fontes de dados
+# backtest.py — Backtest Spot (USDT) sem look-ahead
 # Krypton TradeBot | Estratégia: Supertrend + RSI + MACD Filter
 #
-# Baixa dados históricos primeiro pela Binance Global, depois Binance US e,
-# se necessário, usa Yahoo Finance como fallback. A estratégia do bot não foi alterada.
-#
-# ✅ FIX v2: Pré-aquecimento de 300 candles antes do período solicitado
-#    Isso garante que RSI(14), MACD(12,26,9) e Supertrend(7) estejam
-#    totalmente estabilizados quando o backtest começar a contabilizar trades.
-#    Sem isso, períodos curtos (ex: 1 ano) retornam 0 trades por falta de
-#    histórico nos indicadores.
-#
-# Uso:
-#   python backtest.py --symbol SOLUSDT --start 2022-01-01 --end 2026-06-01
-#   python backtest.py --symbol BTCUSDT --start 2024-01-01
-#   python backtest.py  # SOLUSDT desde 2022-01-01
+# Regras:
+# - sinal no CLOSE do candle i -> entrada no OPEN de i+1;
+# - SL/TP avaliados por LOW/HIGH; se ambos forem tocados no mesmo candle, SL vence;
+# - apenas LONG/spot (sem short);
+# - sizing = 1% do capital TOTAL por trade;
+# - respeita MAX_SIMULTANEOUS_POS, CIRCUIT_BREAKER_PCT, MAX_DRAWDOWN_PCT,
+#   STOP_LOSS_ATR_MULT e TAKE_PROFIT_ATR_MULT;
+# - ATR calculado uma vez no dataset completo, com warm-up.
 
 import argparse
 import time
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -25,91 +20,61 @@ import requests
 import yfinance as yf
 
 from config import (
+    CIRCUIT_BREAKER_PCT,
     FEE_RATE,
     MACD_FAST,
     MACD_SIGNAL,
     MACD_SLOW,
     MAX_DRAWDOWN_PCT,
+    MAX_SIMULTANEOUS_POS,
     RISK_PER_TRADE,
     RSI_HIGH,
     RSI_LOW,
     RSI_PERIOD,
+    STOP_LOSS_ATR_MULT,
     SUPERTREND_MULTIPLIER,
     SUPERTREND_PERIOD,
+    TAKE_PROFIT_ATR_MULT,
 )
 from indicators import compute_atr, compute_signals
 
-
 BINANCE_GLOBAL_URL = "https://api.binance.com/api/v3/klines"
-BINANCE_US_URL     = "https://api.binance.us/api/v3/klines"
-
-# Binance US usa pares USD em alguns ativos. Binance Global usa USDT.
-BINANCE_US_SYMBOL_MAP = {
-    "SOLUSDT": "SOLUSD",
-    "BTCUSDT": "BTCUSD",
-    "ETHUSDT": "ETHUSD",
-    "BNBUSDT": "BNBUSD",
-}
-
-YAHOO_SYMBOL_MAP = {
-    "SOLUSDT": "SOL-USD",
-    "BTCUSDT": "BTC-USD",
-    "ETHUSDT": "ETH-USD",
-    "BNBUSDT": "BNB-USD",
-}
-
-# Número de candles extras buscados ANTES do período para aquecer os indicadores.
-# RSI precisa de ~14, MACD de ~35, Supertrend de ~30 → 300 dias é margem segura.
+BINANCE_US_URL = "https://api.binance.us/api/v3/klines"
+BINANCE_US_SYMBOL_MAP = {"SOLUSDT": "SOLUSD", "BTCUSDT": "BTCUSD", "ETHUSDT": "ETHUSD", "BNBUSDT": "BNBUSD"}
+YAHOO_SYMBOL_MAP = {"SOLUSDT": "SOL-USD", "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "BNBUSDT": "BNB-USD"}
 WARMUP_DAYS = 300
+INITIAL_CAPITAL = 10_000.0
+ENTRY_SLIPPAGE_PCT = 0.0005
 
 
 def _date_to_ms(value: str) -> int:
-    return int(datetime.strptime(value, "%Y-%m-%d").timestamp() * 1000)
+    return int(datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def _klines_to_df(klines: list) -> pd.DataFrame:
     if not klines:
         return pd.DataFrame()
-
     df = pd.DataFrame(
         klines,
-        columns=[
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "quote_vol", "trades", "taker_base", "taker_quote", "ignore",
-        ],
+        columns=["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_vol", "trades", "taker_base", "taker_quote", "ignore"],
     )
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
     df.set_index("open_time", inplace=True)
-
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
-
     return df[["open", "high", "low", "close", "volume"]]
 
 
-def get_ohlcv_binance(symbol: str, start_str: str, end_str: str | None,
-                       base_url: str, symbol_map: dict | None = None) -> pd.DataFrame:
-    """
-    Baixa OHLCV pela API pública da Binance/Binance US em lotes de 1000 candles.
-    """
-    symbol_api = (symbol_map.get(symbol.upper(), symbol.upper())
-                  if symbol_map else symbol.upper())
+def get_ohlcv_binance(symbol: str, start_str: str, end_str: str | None, base_url: str, symbol_map: dict | None = None) -> pd.DataFrame:
+    symbol_api = symbol_map.get(symbol.upper(), symbol.upper()) if symbol_map else symbol.upper()
     start_ts = _date_to_ms(start_str)
-    end_ts   = _date_to_ms(end_str) if end_str else None
-
+    end_ts = _date_to_ms(end_str) if end_str else None
     all_klines = []
     current_ts = start_ts
-
     while True:
-        params = {
-            "symbol":    symbol_api,
-            "interval":  "1d",
-            "startTime": current_ts,
-            "limit":     1000,
-        }
+        params = {"symbol": symbol_api, "interval": "1d", "startTime": current_ts, "limit": 1000}
         if end_ts:
             params["endTime"] = end_ts
-
         try:
             response = requests.get(base_url, params=params, timeout=15)
             if response.status_code != 200:
@@ -118,234 +83,206 @@ def get_ohlcv_binance(symbol: str, start_str: str, end_str: str | None,
         except Exception:
             time.sleep(2)
             break
-
         if not klines or isinstance(klines, dict):
             break
-
         all_klines.extend(klines)
-
         if len(klines) < 1000:
             break
-
         current_ts = klines[-1][0] + 86_400_000
         if end_ts and current_ts >= end_ts:
             break
-
         time.sleep(0.2)
-
     return _klines_to_df(all_klines)
 
 
-def get_ohlcv_yahoo(symbol: str, start_str: str,
-                     end_str: str | None = None) -> pd.DataFrame:
-    """
-    Fallback via Yahoo Finance para períodos em que Binance não estiver disponível.
-    """
+def get_ohlcv_yahoo(symbol: str, start_str: str, end_str: str | None = None) -> pd.DataFrame:
     yf_symbol = YAHOO_SYMBOL_MAP.get(symbol.upper())
     if not yf_symbol:
         return pd.DataFrame()
-
     try:
-        df = yf.download(
-            yf_symbol,
-            start=start_str,
-            end=end_str,
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-        )
+        df = yf.download(yf_symbol, start=start_str, end=end_str, interval="1d", auto_adjust=False, progress=False, threads=False)
     except Exception:
         return pd.DataFrame()
-
     if df.empty:
         return pd.DataFrame()
-
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
-    df = df.rename(columns={
-        "Open": "open", "High": "high", "Low": "low",
-        "Close": "close", "Volume": "volume",
-    })
-
-    required_cols = ["open", "high", "low", "close", "volume"]
-    if not all(col in df.columns for col in required_cols):
+    df = df.rename(columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"})
+    required = ["open", "high", "low", "close", "volume"]
+    if not all(col in df.columns for col in required):
         return pd.DataFrame()
+    df.index = pd.to_datetime(df.index, utc=True)
+    return df[required].dropna()
 
-    df.index = pd.to_datetime(df.index)
-    return df[required_cols].dropna()
 
-
-def get_ohlcv(symbol: str, start_str: str,
-               end_str: str | None = None) -> tuple[pd.DataFrame, str]:
-    """
-    Busca dados em múltiplas fontes. Retorna a fonte com mais candles.
-    """
+def get_ohlcv(symbol: str, start_str: str, end_str: str | None = None) -> tuple[pd.DataFrame, str]:
     sources = [
-        ("Binance Global", lambda: get_ohlcv_binance(
-            symbol, start_str, end_str, BINANCE_GLOBAL_URL)),
-        ("Binance US",     lambda: get_ohlcv_binance(
-            symbol, start_str, end_str, BINANCE_US_URL, BINANCE_US_SYMBOL_MAP)),
-        ("Yahoo Finance",  lambda: get_ohlcv_yahoo(symbol, start_str, end_str)),
+        ("Binance Global", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_GLOBAL_URL)),
+        ("Binance US", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_US_URL, BINANCE_US_SYMBOL_MAP)),
+        ("Yahoo Finance", lambda: get_ohlcv_yahoo(symbol, start_str, end_str)),
     ]
-
-    best_df     = pd.DataFrame()
+    best_df = pd.DataFrame()
     best_source = "nenhuma fonte"
-
     for source_name, loader in sources:
         print(f"\n  Tentando {source_name}...", end=" ", flush=True)
         df = loader()
         if len(df) > len(best_df):
-            best_df     = df
-            best_source = source_name
-
+            best_df, best_source = df, source_name
         if len(df) >= 50:
             print(f"✓ {len(df)} candles")
             return df, source_name
-
         print(f"{len(df)} candles")
-
     return best_df, best_source
 
 
+def _buy_execution_price(open_price: float) -> float:
+    return open_price * (1.0 + ENTRY_SLIPPAGE_PCT)
+
+
+def _exit_trade(position: dict, exit_price: float) -> float:
+    gross_pnl = position["quantity"] * (exit_price - position["entry_price"])
+    exit_fee = position["quantity"] * exit_price * FEE_RATE
+    return gross_pnl - exit_fee
+
+
 def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
-    """
-    Executa backtest da estratégia Supertrend + RSI + MACD.
-
-    ✅ Pré-aquecimento: busca WARMUP_DAYS candles extras antes de `start`
-       para garantir que todos os indicadores estejam estabilizados.
-       As métricas (trades, retorno, etc.) só são contabilizadas a partir
-       de `start`, não do período de aquecimento.
-
-    Parâmetros de simulação:
-      - Position sizing ATR-based (1% de risco por trade)
-      - Stop Loss: 2× ATR(14)
-      - Take Profit: 3× ATR(14)  |  R:R = 1,5:1
-      - Taxas: 0,1% por lado (Binance spot)
-      - Halt automático ao atingir max drawdown (-20%)
-    """
-    print(f"\n{'='*60}")
-    print(f"KRYPTON BACKTEST: {symbol}")
+    print(f"\n{'=' * 60}")
+    print(f"KRYPTON BACKTEST SPOT: {symbol} (quote USDT)")
     print(f"Período: {start} → {end or 'hoje'}")
-    print(f"{'='*60}")
+    print(f"SL={STOP_LOSS_ATR_MULT}× ATR | TP={TAKE_PROFIT_ATR_MULT}× ATR | risco={RISK_PER_TRADE:.1%}")
+    print(f"{'=' * 60}")
 
-    # ── Calcular data de início com pré-aquecimento ──────────────────────────
-    start_dt   = datetime.strptime(start, "%Y-%m-%d")
-    warmup_dt  = start_dt - timedelta(days=WARMUP_DAYS)
-    warmup_str = warmup_dt.strftime("%Y-%m-%d")
-
-    print(f"Baixando dados históricos (incl. {WARMUP_DAYS}d de aquecimento)...", flush=True)
-
+    start_dt = datetime.strptime(start, "%Y-%m-%d")
+    warmup_str = (start_dt - timedelta(days=WARMUP_DAYS)).strftime("%Y-%m-%d")
     df_full, data_source = get_ohlcv(symbol, warmup_str, end)
-
     if len(df_full) < 50:
-        print(f"\n❌ Dados insuficientes ({len(df_full)} candles). "
-              f"Verifique o símbolo e as datas.")
+        print(f"\n❌ Dados insuficientes ({len(df_full)} candles).")
         return {}
 
-    print(f"\nFonte usada: {data_source}")
-    print(f"✓ {len(df_full)} candles carregados (aquecimento incluso).")
-    print(f"  {df_full.index[0].date()} → {df_full.index[-1].date()}")
-
-    # ── Gerar sinais sobre o dataset COMPLETO (inclui aquecimento) ───────────
-    # Isso garante que RSI, MACD e Supertrend estejam estabilizados em `start`.
+    df_full = df_full.sort_index()
     signals_full = compute_signals(
         df_full,
-        st_period  = SUPERTREND_PERIOD,
-        st_mult    = SUPERTREND_MULTIPLIER,
-        rsi_period = RSI_PERIOD,
-        rsi_low    = RSI_LOW,
-        rsi_high   = RSI_HIGH,
-        macd_fast  = MACD_FAST,
-        macd_slow  = MACD_SLOW,
-        macd_sig   = MACD_SIGNAL,
+        st_period=SUPERTREND_PERIOD,
+        st_mult=SUPERTREND_MULTIPLIER,
+        rsi_period=RSI_PERIOD,
+        rsi_low=RSI_LOW,
+        rsi_high=RSI_HIGH,
+        macd_fast=MACD_FAST,
+        macd_slow=MACD_SLOW,
+        macd_sig=MACD_SIGNAL,
     )
-
-    # ── Fatiar apenas o período solicitado para contabilizar métricas ─────────
-    # Os trades e o equity curve começam em `start`, não no período de warmup.
-    start_ts = pd.Timestamp(start)
-    df       = df_full.loc[start_ts:].copy()
-    signals  = signals_full.loc[start_ts:].copy()
-
-    print(f"\nPeríodo de backtest (sem aquecimento): "
-          f"{df.index[0].date()} → {df.index[-1].date()} ({len(df)} candles)")
-
+    # ATR é calculado UMA vez sobre o dataset completo, antes do slice do período.
+    atr_full = compute_atr(df_full["high"], df_full["low"], df_full["close"])
+    start_ts = pd.Timestamp(start, tz="UTC")
+    df = df_full.loc[start_ts:].copy()
+    signals = signals_full.loc[df.index]
+    atr = atr_full.loc[df.index]
     if len(df) < 10:
-        print("❌ Período de backtest muito curto após remover aquecimento.")
+        print("❌ Período de backtest muito curto.")
         return {}
 
-    # ── Simulação de Trading ──────────────────────────────────────────────────
-    capital  = 10_000.0
-    peak     = capital
-    equity   = [capital]
-    trades   = []
-    pos      = 0
-    entry    = 0.0
-    pos_size = 0.0
+    capital = INITIAL_CAPITAL
+    peak = capital
+    equity = []
+    trades = []
+    position = None
+    halted = False
+    daily_start_capital = capital
+    daily_date = None
+    entry_pending = None
 
-    for i in range(1, len(df)):
-        price = df["close"].iloc[i]
-        sig   = signals.iloc[i]
-        atr_v = compute_atr(df["high"], df["low"], df["close"]).iloc[i]
+    def reset_day(day):
+        nonlocal daily_start_capital, daily_date
+        if daily_date != day:
+            daily_date = day
+            daily_start_capital = capital
 
-        # Gerenciar posição aberta
-        if pos != 0:
-            sl     = entry - 2 * atr_v if pos ==  1 else entry + 2 * atr_v
-            tp     = entry + 3 * atr_v if pos ==  1 else entry - 3 * atr_v
-            hit_sl = (pos ==  1 and price <= sl) or (pos == -1 and price >= sl)
-            hit_tp = (pos ==  1 and price >= tp) or (pos == -1 and price <= tp)
-            exit_sg = (pos != sig and sig != 0)
+    def circuit_breaker_active():
+        if daily_start_capital <= 0:
+            return False
+        return (daily_start_capital - capital) / daily_start_capital >= CIRCUIT_BREAKER_PCT
 
-            if hit_sl or hit_tp or exit_sg:
-                fee    = pos_size * price * FEE_RATE
-                pnl    = (pos_size * (price - entry) if pos == 1
-                          else pos_size * (entry - price)) - fee
-                capital += pnl
-                trades.append({
-                    "pnl"        : pnl,
-                    "exit_reason": "SL" if hit_sl else "TP" if hit_tp else "Sig",
-                })
-                pos  = 0
-                peak = max(peak, capital)
+    for i in range(len(df)):
+        row = df.iloc[i]
+        reset_day(df.index[i].date())
 
-        # Halt por max drawdown
+        # Sinal no close anterior -> execução no OPEN atual.
+        if entry_pending is not None and position is None and not halted and not circuit_breaker_active():
+            entry_atr = entry_pending["atr"]
+            entry = _buy_execution_price(float(row["open"]))
+            sl_distance = entry_atr * STOP_LOSS_ATR_MULT
+            tp_distance = entry_atr * TAKE_PROFIT_ATR_MULT
+            if sl_distance > 0 and pd.notna(entry_atr):
+                risk_amount = capital * RISK_PER_TRADE
+                raw_qty = risk_amount / sl_distance
+                # Cap de notional: spot não pode assumir alavancagem implícita.
+                max_qty = capital / (entry * (1 + FEE_RATE))
+                qty = min(raw_qty, max_qty)
+                notional = qty * entry
+                if qty > 0 and notional >= 10:
+                    entry_fee = notional * FEE_RATE
+                    capital -= entry_fee
+                    position = {
+                        "entry_price": entry,
+                        "quantity": qty,
+                        "sl": entry - sl_distance,
+                        "tp": entry + tp_distance,
+                        "entry_time": df.index[i],
+                    }
+            entry_pending = None
+
+        # SL/TP usam LOW/HIGH. Se os dois forem tocados no mesmo candle, SL tem prioridade.
+        if position is not None:
+            hit_sl = float(row["low"]) <= position["sl"]
+            hit_tp = float(row["high"]) >= position["tp"]
+            if hit_sl or hit_tp:
+                reason = "SL" if hit_sl else "TP"
+                exit_price = position["sl"] if hit_sl else position["tp"]
+                capital += _exit_trade(position, exit_price)
+                trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": _exit_trade(position, exit_price), "exit_reason": reason})
+                position = None
+
+        # Signal exit: sinal do CLOSE anterior executa no OPEN atual. SL/TP já tiveram prioridade.
+        if position is not None and i > 0 and int(signals.iloc[i - 1]) != 1:
+            exit_price = float(row["open"])
+            capital += _exit_trade(position, exit_price)
+            trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": _exit_trade(position, exit_price), "exit_reason": "Sig"})
+            position = None
+
+        peak = max(peak, capital)
         if peak > 0 and (peak - capital) / peak >= MAX_DRAWDOWN_PCT:
-            equity.append(capital)
-            continue
+            halted = True
+            entry_pending = None
 
-        # Abrir nova posição
-        if pos == 0 and sig != 0 and pd.notna(atr_v) and atr_v > 0:
-            entry    = price * (1.0005 if sig == 1 else 0.9995)
-            pos_size = (capital * RISK_PER_TRADE) / (atr_v * 2)
-            capital -= pos_size * entry * FEE_RATE
-            pos      = int(sig)
+        # O sinal atual só pode abrir no próximo candle; nunca no mesmo close.
+        if position is None and entry_pending is None and not halted and not circuit_breaker_active() and int(signals.iloc[i]) == 1 and pd.notna(atr.iloc[i]) and float(atr.iloc[i]) > 0 and i + 1 < len(df):
+            entry_pending = {"atr": float(atr.iloc[i]), "signal_time": df.index[i]}
 
         equity.append(capital)
 
-    # ── Métricas ──────────────────────────────────────────────────────────────
-    eq     = pd.Series(equity, index=df.index[: len(equity)])
-    ret    = (capital - 10_000) / 10_000
-    rets   = eq.pct_change().dropna()
+    if position is not None:
+        exit_price = float(df["close"].iloc[-1])
+        capital += _exit_trade(position, exit_price)
+        trades.append({"entry_time": position["entry_time"], "exit_time": df.index[-1], "pnl": _exit_trade(position, exit_price), "exit_reason": "EOD"})
+        equity[-1] = capital
+
+    eq = pd.Series(equity, index=df.index[:len(equity)])
+    ret = (capital - INITIAL_CAPITAL) / INITIAL_CAPITAL
+    rets = eq.pct_change().dropna()
     sharpe = (rets.mean() / rets.std()) * np.sqrt(252) if rets.std() > 0 else 0
-    dd     = ((eq - eq.cummax()) / eq.cummax()).min()
-    wins   = [t for t in trades if t["pnl"] >  0]
+    dd = ((eq - eq.cummax()) / eq.cummax()).min()
+    wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] <= 0]
-    pf     = (
-        sum(t["pnl"] for t in wins) / abs(sum(t["pnl"] for t in losses))
-        if losses else float("inf")
-    )
-    wr     = len(wins) / len(trades) if trades else 0
+    pf = sum(t["pnl"] for t in wins) / abs(sum(t["pnl"] for t in losses)) if losses else float("inf")
+    wr = len(wins) / len(trades) if trades else 0
     bh_ret = (df["close"].iloc[-1] - df["close"].iloc[0]) / df["close"].iloc[0]
+    exit_reasons = {}
+    for trade in trades:
+        exit_reasons[trade["exit_reason"]] = exit_reasons.get(trade["exit_reason"], 0) + 1
 
-    exit_reasons: dict = {}
-    for t in trades:
-        exit_reasons[t["exit_reason"]] = exit_reasons.get(t["exit_reason"], 0) + 1
-
-    # ── Impressão dos Resultados ──────────────────────────────────────────────
-    print(f"\n{'─'*60}")
+    print(f"\n{'─' * 60}")
     print(f"{'MÉTRICA':<28} {'BOT':>10} {'BUY & HOLD':>12}")
-    print(f"{'─'*60}")
+    print(f"{'─' * 60}")
     print(f"{'Retorno Total':<28} {ret:>+9.1%} {bh_ret:>+11.1%}")
     print(f"{'Sharpe Ratio':<28} {sharpe:>10.3f} {'—':>12}")
     print(f"{'Max Drawdown':<28} {dd:>+9.1%} {'—':>12}")
@@ -354,52 +291,33 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
     print(f"{'Nº de Trades':<28} {len(trades):>10} {'—':>12}")
     print(f"{'Alpha vs B&H':<28} {ret - bh_ret:>+9.1%} {'—':>12}")
     print(f"{'Capital Final':<28} ${capital:>9,.2f} {'—':>12}")
-    print(f"{'─'*60}")
+    print(f"{'─' * 60}")
     print(f"Saídas: {exit_reasons}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return {
-        "symbol"        : symbol,
-        "start"         : start,
-        "end"           : end or str(date.today()),
-        "data_source"   : data_source,
-        "n_candles"     : len(df),
-        "n_trades"      : len(trades),
-        "return_total"  : ret,
-        "sharpe_ratio"  : sharpe,
-        "max_drawdown"  : dd,
-        "win_rate"      : wr,
-        "profit_factor" : pf,
-        "final_capital" : capital,
-        "bh_return"     : bh_ret,
-        "alpha_vs_bh"   : ret - bh_ret,
+        "symbol": symbol,
+        "quote_asset": "USDT",
+        "start": start,
+        "end": end or str(date.today()),
+        "data_source": data_source,
+        "n_candles": len(df),
+        "n_trades": len(trades),
+        "return_total": ret,
+        "sharpe_ratio": sharpe,
+        "max_drawdown": dd,
+        "win_rate": wr,
+        "profit_factor": pf,
+        "final_capital": capital,
+        "bh_return": bh_ret,
+        "alpha_vs_bh": ret - bh_ret,
     }
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Krypton TradeBot — Backtest Standalone",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemplos:
-  python backtest.py --symbol SOLUSDT --start 2022-01-01 --end 2026-06-01
-  python backtest.py --symbol BTCUSDT --start 2024-01-01
-  python backtest.py  # SOLUSDT desde 2022-01-01
-        """,
-    )
-    parser.add_argument(
-        "--symbol", default="SOLUSDT",
-        choices=["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"],
-        help="Par de trading (padrão: SOLUSDT)",
-    )
-    parser.add_argument(
-        "--start", default="2022-01-01",
-        help="Data de início YYYY-MM-DD (padrão: 2022-01-01)",
-    )
-    parser.add_argument(
-        "--end", default=None,
-        help="Data de fim YYYY-MM-DD (padrão: hoje)",
-    )
+    parser = argparse.ArgumentParser(description="Krypton TradeBot — Backtest Spot (USDT)")
+    parser.add_argument("--symbol", default="SOLUSDT", choices=["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"])
+    parser.add_argument("--start", default="2022-01-01")
+    parser.add_argument("--end", default=None)
     args = parser.parse_args()
     run_backtest(args.symbol, args.start, args.end)
