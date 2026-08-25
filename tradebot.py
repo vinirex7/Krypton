@@ -1,23 +1,16 @@
-# tradebot.py — Loop Principal do Krypton TradeBot
-# Estratégia: Supertrend + RSI + MACD Filter
-#
-# Ciclo diário executado às 00:05 UTC (após fechamento do candle D1):
-#   1. Verifica SL/TP das posições abertas
-#   2. Reset diário do circuit breaker
-#   3. Para cada par: calcula sinais e abre/fecha posições
-#   4. Entre ciclos: verifica SL/TP a cada 5 minutos (tempo real)
-#
-# ⚠️  USE_TESTNET = True por padrão em config.py.
-#     Mude para False SOMENTE após ≥30 dias em testnet sem erros.
+# tradebot.py — Krypton Spot TradeBot
+# Live quote asset: U. Backtest quote asset: USDT.
+# O mercado live é SPOT; SHORT foi removido. Sinal -1 significa EXIT.
 
 import logging
+import sqlite3
 import time
-from datetime import datetime
-
-import schedule
+from datetime import datetime, timezone
 
 from binance_client import BinanceInterface
 from config import (
+    ENTRY_FILL_TIMEOUT_SEC,
+    LIVE_QUOTE_ASSET,
     LOG_FILE,
     MACD_FAST,
     MACD_SIGNAL,
@@ -26,8 +19,10 @@ from config import (
     RSI_HIGH,
     RSI_LOW,
     RSI_PERIOD,
+    STATE_DB_FILE,
     SUPERTREND_MULTIPLIER,
     SUPERTREND_PERIOD,
+    TAKE_PROFIT_ATR_MULT,
     TIMEFRAME,
     TRADING_PAIRS,
     USE_TESTNET,
@@ -35,285 +30,348 @@ from config import (
 from indicators import compute_atr, compute_signals
 from risk_manager import RiskManager
 
-# ─── Configuração de Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(),
-    ],
+    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
 logger = logging.getLogger("Krypton.Main")
 
 
 class TradeBot:
-    """
-    Krypton TradeBot — Estratégia Supertrend + RSI + MACD Filter.
-
-    Executa uma vez por dia após o fechamento do candle diário (00:05 UTC).
-    Verifica SL/TP em tempo real a cada 5 minutos.
-
-    Performance (backtest Jan/2022 – Mai/2026):
-      Retorno Total : +37,7% (SOLU)
-      Sharpe Ratio  : 0,932
-      Max Drawdown  : -5,0%
-      Win Rate      : 54,0%
-      Profit Factor : 1,748
-    """
-
     def __init__(self):
-        self.binance      = BinanceInterface()
-        self.risk_manager : RiskManager | None = None
-        self.positions    : dict = {}         # {symbol: {side, entry_price, quantity, sl, tp, order_id}}
-        self.symbol_infos : dict = {}
+        self.binance = BinanceInterface()
+        self.positions = {}
+        self.symbol_infos = {}
+        self._init_state_db()
         self._initialize()
 
-    # ─── Inicialização ────────────────────────────────────────────────────────
-
-    def _initialize(self) -> None:
-        """Inicializa capital, symbol_infos e RiskManager."""
-        u_balance = self.binance.get_account_balance("U")
-        for sym in TRADING_PAIRS:
-            self.symbol_infos[sym] = self.binance.get_symbol_info(sym)
-        self.risk_manager = RiskManager(initial_capital=u_balance)
-        logger.info(
-            f"🟢 Krypton TradeBot inicializado | "
-            f"Capital: ${u_balance:,.2f} U | "
-            f"Modo: {'TESTNET ⚠️' if USE_TESTNET else 'PRODUÇÃO 🔴'}"
-        )
-
-    # ─── Cálculo de Capital ───────────────────────────────────────────────────
-
-    def _get_current_capital(self) -> float:
-        """
-        Calcula capital total: U livre + valor mark-to-market das posições abertas.
-        """
-        u_balance = self.binance.get_account_balance("U")
-        for sym, pos in self.positions.items():
-            price = self.binance.get_current_price(sym)
-            if pos["side"] == "LONG":
-                pnl = pos["quantity"] * (price - pos["entry_price"])
-            else:
-                pnl = pos["quantity"] * (pos["entry_price"] - price)
-            u_balance += pos["quantity"] * pos["entry_price"] + pnl
-        return u_balance
-
-    # ─── Gerenciamento de Posições ────────────────────────────────────────────
-
-    def _close_position(self, symbol: str, reason: str = "Signal") -> None:
-        """Fecha posição existente com ordem limit ao preço atual."""
-        if symbol not in self.positions:
-            return
-        pos        = self.positions[symbol]
-        price      = self.binance.get_current_price(symbol)
-        close_side = "SELL" if pos["side"] == "LONG" else "BUY"
-        order = self.binance.place_limit_order(
-            symbol      = symbol,
-            side        = close_side,
-            quantity    = pos["quantity"],
-            price       = price,
-            symbol_info = self.symbol_infos[symbol],
-        )
-        if order:
-            entry = pos["entry_price"]
-            pnl_pct = (
-                (price - entry) / entry * 100 if pos["side"] == "LONG"
-                else (entry - price) / entry * 100
+    def _init_state_db(self):
+        self.db = sqlite3.connect(STATE_DB_FILE)
+        self.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS positions (
+                symbol TEXT PRIMARY KEY,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                stop_loss REAL NOT NULL,
+                take_profit REAL NOT NULL,
+                order_list_id INTEGER,
+                updated_at TEXT NOT NULL
             )
-            logger.info(
-                f"📤 Posição fechada | {symbol} | Razão: {reason} | "
-                f"Entry: {entry:.4f} | Exit: {price:.4f} | "
-                f"PnL: {pnl_pct:+.2f}%"
-            )
-            del self.positions[symbol]
-
-    def _open_position(
-        self,
-        symbol: str,
-        direction: int,
-        capital_allocation: float,
-        atr: float,
-    ) -> None:
-        """
-        Abre nova posição long (+1) ou short (-1) com sizing ATR-based.
-
-        direction : +1 = LONG | -1 = SHORT
-        """
-        if symbol in self.positions:
-            return  # já tem posição neste par
-
-        current_capital = self._get_current_capital()
-        if not self.risk_manager.can_trade(current_capital):
-            return
-
-        pair_capital = current_capital * capital_allocation
-        price        = self.binance.get_current_price(symbol)
-        sizing       = self.risk_manager.calculate_position_size(pair_capital, price, atr)
-
-        if sizing["quantity"] <= 0:
-            logger.warning(f"Position size calculado como zero para {symbol}. Pulando.")
-            return
-
-        side = "BUY" if direction == 1 else "SELL"
-        # Limit price ligeiramente favorável ao mercado (0,05%)
-        limit_price = price * (1.0005 if direction == 1 else 0.9995)
-
-        order = self.binance.place_limit_order(
-            symbol      = symbol,
-            side        = side,
-            quantity    = sizing["quantity"],
-            price       = limit_price,
-            symbol_info = self.symbol_infos[symbol],
+            """
         )
+        self.db.commit()
 
-        if order:
-            sl = sizing["stop_loss_long"]  if direction == 1 else sizing["stop_loss_short"]
-            tp = sizing["take_profit_long"] if direction == 1 else sizing["take_profit_short"]
+    def _save_position(self, symbol, pos):
+        self.db.execute(
+            """
+            INSERT INTO positions(symbol, side, entry_price, quantity, stop_loss,
+                                   take_profit, order_list_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                side=excluded.side,
+                entry_price=excluded.entry_price,
+                quantity=excluded.quantity,
+                stop_loss=excluded.stop_loss,
+                take_profit=excluded.take_profit,
+                order_list_id=excluded.order_list_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                symbol, pos["side"], pos["entry_price"], pos["quantity"],
+                pos["stop_loss"], pos["take_profit"], pos.get("order_list_id"),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self.db.commit()
+
+    def _delete_position(self, symbol):
+        self.positions.pop(symbol, None)
+        self.db.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
+        self.db.commit()
+
+    def _load_positions(self):
+        rows = self.db.execute(
+            "SELECT symbol, side, entry_price, quantity, stop_loss, take_profit, order_list_id FROM positions"
+        ).fetchall()
+        for row in rows:
+            symbol, side, entry, qty, sl, tp, order_list_id = row
             self.positions[symbol] = {
-                "side"        : "LONG" if direction == 1 else "SHORT",
-                "entry_price" : price,
-                "quantity"    : sizing["quantity"],
-                "stop_loss"   : sl,
-                "take_profit" : tp,
-                "order_id"    : order["orderId"],
+                "side": side,
+                "entry_price": entry,
+                "quantity": qty,
+                "stop_loss": sl,
+                "take_profit": tp,
+                "order_list_id": order_list_id,
             }
-            logger.info(
-                f"📥 Nova posição | {symbol} | {self.positions[symbol]['side']} | "
-                f"Entry: {price:.4f} | SL: {sl:.4f} | TP: {tp:.4f} | "
-                f"Risco: ${sizing['risk_amount_usd']:.2f} | R:R {sizing['rr_ratio']:.1f}"
-            )
 
-    # ─── Verificação de SL/TP ─────────────────────────────────────────────────
-
-    def _check_sl_tp(self) -> None:
-        """Verifica se alguma posição aberta atingiu o SL ou TP. Executa a cada 5 min."""
-        for symbol in list(self.positions.keys()):
-            pos   = self.positions[symbol]
-            price = self.binance.get_current_price(symbol)
-
-            hit_sl = (
-                (pos["side"] == "LONG"  and price <= pos["stop_loss"]) or
-                (pos["side"] == "SHORT" and price >= pos["stop_loss"])
-            )
-            hit_tp = (
-                (pos["side"] == "LONG"  and price >= pos["take_profit"]) or
-                (pos["side"] == "SHORT" and price <= pos["take_profit"])
-            )
-
-            if hit_sl:
-                self._close_position(symbol, "StopLoss 🔴")
-            elif hit_tp:
-                self._close_position(symbol, "TakeProfit ✅")
-
-    # ─── Ciclo Diário Principal ───────────────────────────────────────────────
-
-    def daily_cycle(self) -> None:
-        """
-        Ciclo principal executado às 00:05 UTC:
-          1. Verifica SL/TP
-          2. Reset diário do circuit breaker
-          3. Avalia sinais e gerencia posições para cada par
-        """
-        logger.info("=" * 70)
+    def _initialize(self):
+        quote_balance = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
+        for symbol in TRADING_PAIRS:
+            self.symbol_infos[symbol] = self.binance.get_symbol_info(symbol)
+        self._load_positions()
+        self._reconcile_positions()
+        self.risk_manager = RiskManager(initial_capital=self._get_current_capital())
         logger.info(
-            f"🔄 CICLO DIÁRIO | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            "Krypton inicializado | Capital: %.2f %s | Pares: %s | Modo: %s",
+            quote_balance, LIVE_QUOTE_ASSET, list(TRADING_PAIRS),
+            "TESTNET" if USE_TESTNET else "PRODUÇÃO",
         )
 
-        current_capital = self._get_current_capital()
-        logger.info(f"💰 Capital atual: ${current_capital:,.2f} U")
-        logger.info(f"📊 {self.risk_manager.status(current_capital)}")
+    @staticmethod
+    def _base_asset(symbol):
+        if not symbol.endswith(LIVE_QUOTE_ASSET):
+            raise ValueError(f"Símbolo {symbol} não termina em {LIVE_QUOTE_ASSET}")
+        return symbol[: -len(LIVE_QUOTE_ASSET)]
 
-        # Passo 1: Verificar SL/TP antes de qualquer decisão
-        self._check_sl_tp()
+    def _get_current_capital(self):
+        capital = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
+        for symbol, pos in self.positions.items():
+            capital += pos["quantity"] * self.binance.get_current_price(symbol)
+        return capital
 
-        # Passo 2: Reset do circuit breaker (novo dia)
-        self.risk_manager.reset_daily(current_capital)
+    def _protect_position(self, symbol):
+        pos = self.positions.get(symbol)
+        if not pos:
+            return False
+        order = self.binance.create_oco_order(
+            symbol=symbol,
+            quantity=pos["quantity"],
+            take_profit_price=pos["take_profit"],
+            stop_price=pos["stop_loss"],
+            symbol_info=self.symbol_infos[symbol],
+        )
+        if not order:
+            logger.critical("POSIÇÃO SEM OCO — não abrir novas posições | %s", symbol)
+            return False
+        pos["order_list_id"] = order.get("orderListId")
+        self._save_position(symbol, pos)
+        return True
 
-        # Passo 3: Verificar se pode operar
-        if not self.risk_manager.can_trade(current_capital):
-            logger.warning("⛔ Trading pausado pelos controles de risco.")
+    def _reconcile_positions(self):
+        """Reconcilia RAM/SQLite com saldo real e ordens abertas no boot."""
+        for symbol in list(self.positions):
+            pos = self.positions[symbol]
+            base_total = self.binance.get_asset_total(self._base_asset(symbol))
+            if base_total <= 0:
+                logger.warning("Posição fantasma removida | %s | saldo real zerado", symbol)
+                self._delete_position(symbol)
+                continue
+
+            pos["quantity"] = base_total
+            open_orders = self.binance.get_open_orders(symbol)
+            if not open_orders:
+                self._protect_position(symbol)
+            self._save_position(symbol, pos)
+
+        # Se existe ativo sem estado, proteger em vez de fingir que não existe.
+        for symbol in TRADING_PAIRS:
+            if symbol in self.positions:
+                continue
+            base_total = self.binance.get_asset_total(self._base_asset(symbol))
+            price = self.binance.get_current_price(symbol)
+            info = self.symbol_infos[symbol]
+            if base_total * price < info["min_notional"]:
+                continue
+
+            logger.critical("POSIÇÃO ÓRFÃ detectada | %s | qty %.8f", symbol, base_total)
+            df = self.binance.get_ohlcv(symbol, interval=TIMEFRAME, limit=300)
+            atr = float(compute_atr(df["high"], df["low"], df["close"]).iloc[-1])
+            if atr <= 0:
+                continue
+            self.positions[symbol] = {
+                "side": "LONG",
+                "entry_price": price,
+                "quantity": base_total,
+                "stop_loss": price - 2.0 * atr,
+                "take_profit": price + TAKE_PROFIT_ATR_MULT * atr,
+                "order_list_id": None,
+            }
+            self._save_position(symbol, self.positions[symbol])
+            self._protect_position(symbol)
+
+    def _open_position(self, symbol, atr, signal_price):
+        if symbol in self.positions or len(self.positions) >= MAX_SIMULTANEOUS_POS:
+            return
+        capital = self._get_current_capital()
+        if not self.risk_manager.can_trade(capital):
             return
 
-        # Passo 4: Processar cada par de trading
-        for symbol, allocation in TRADING_PAIRS.items():
+        # 1% do capital TOTAL; TRADING_PAIRS allocation não reduz o risco por trade.
+        mid = self.binance.get_current_price(symbol)
+        sizing = self.risk_manager.calculate_position_size(capital, mid, atr)
+        if sizing["quantity"] <= 0:
+            return
+
+        limit_price = mid * 1.0005
+        order = self.binance.place_limit_order(
+            symbol=symbol,
+            side="BUY",
+            quantity=sizing["quantity"],
+            price=limit_price,
+            symbol_info=self.symbol_infos[symbol],
+            reference_price=signal_price,
+        )
+        if not order:
+            return
+
+        # Aceite da LIMIT não é fill: só persistimos posição após FILLED.
+        filled = self.binance.wait_for_fill(symbol, order["orderId"], ENTRY_FILL_TIMEOUT_SEC)
+        if not filled:
+            logger.info("Entrada cancelada por timeout sem fill | %s | order=%s", symbol, order["orderId"])
+            return
+
+        executed_qty = float(filled.get("executedQty", 0))
+        quote_qty = float(filled.get("cummulativeQuoteQty", 0))
+        if executed_qty <= 0:
+            logger.error("Fill sem executedQty | %s | order=%s", symbol, order["orderId"])
+            return
+        entry_price = quote_qty / executed_qty if quote_qty > 0 else float(filled["price"])
+        sl = entry_price - sizing["sl_distance"]
+        tp = entry_price + sizing["tp_distance"]
+
+        self.positions[symbol] = {
+            "side": "LONG",
+            "entry_price": entry_price,
+            "quantity": executed_qty,
+            "stop_loss": sl,
+            "take_profit": tp,
+            "order_list_id": None,
+        }
+        self._save_position(symbol, self.positions[symbol])
+
+        if not self._protect_position(symbol):
+            logger.critical("Entrada FILLED mas OCO falhou | %s | reconciliação obrigatória", symbol)
+
+        logger.info(
+            "LONG FILLED | %s | qty %.8f | entry %.8f | SL %.8f | TP %.8f | RR %.2f",
+            symbol, executed_qty, entry_price, sl, tp, sizing["rr_ratio"],
+        )
+
+    def _close_position(self, symbol, reason="Signal"):
+        pos = self.positions.get(symbol)
+        if not pos:
+            return
+
+        if pos.get("order_list_id") is not None:
+            self.binance.cancel_oco_order(symbol, pos["order_list_id"])
+            pos["order_list_id"] = None
+            self._save_position(symbol, pos)
+
+        price = self.binance.get_current_price(symbol)
+        order = self.binance.place_limit_order(
+            symbol=symbol,
+            side="SELL",
+            quantity=pos["quantity"],
+            price=price * 0.9995,
+            symbol_info=self.symbol_infos[symbol],
+            reference_price=price,
+        )
+        if not order:
+            self._protect_position(symbol)
+            return
+
+        filled = self.binance.wait_for_fill(symbol, order["orderId"])
+        if not filled:
+            logger.warning("Saída não executada; restaurando OCO | %s", symbol)
+            self._protect_position(symbol)
+            return
+
+        logger.info("Posição encerrada | %s | razão=%s", symbol, reason)
+        self._delete_position(symbol)
+
+    def _check_orders_and_reconcile(self):
+        """Exchange/OCO é a proteção; RAM/SQLite serve para estado e reconciliação."""
+        for symbol in list(self.positions):
+            pos = self.positions[symbol]
+            base_total = self.binance.get_asset_total(self._base_asset(symbol))
+            if base_total <= 0:
+                logger.info("OCO executado/posição zerada | %s", symbol)
+                self._delete_position(symbol)
+                continue
+
+            step = self.symbol_infos[symbol]["step_size"]
+            if abs(base_total - pos["quantity"]) > step:
+                pos["quantity"] = base_total
+                self._save_position(symbol, pos)
+
+            if not self.binance.get_open_orders(symbol):
+                self._protect_position(symbol)
+
+    def daily_cycle(self):
+        now = datetime.now(timezone.utc)
+        logger.info("=" * 70)
+        logger.info("CICLO DIÁRIO UTC | %s", now.strftime("%Y-%m-%d %H:%M UTC"))
+
+        # Reset só no início de um novo dia UTC; não zera a perda antes de can_trade.
+        current_capital = self._get_current_capital()
+        self.risk_manager.reset_daily(current_capital, now.date())
+        self._check_orders_and_reconcile()
+        current_capital = self._get_current_capital()
+
+        if not self.risk_manager.can_trade(current_capital):
+            logger.warning("Trading pausado pelos controles de risco.")
+            return
+
+        for symbol in TRADING_PAIRS:
             try:
                 df = self.binance.get_ohlcv(symbol, interval=TIMEFRAME, limit=300)
-
                 signals = compute_signals(
                     df,
-                    st_period  = SUPERTREND_PERIOD,
-                    st_mult    = SUPERTREND_MULTIPLIER,
-                    rsi_period = RSI_PERIOD,
-                    rsi_low    = RSI_LOW,
-                    rsi_high   = RSI_HIGH,
-                    macd_fast  = MACD_FAST,
-                    macd_slow  = MACD_SLOW,
-                    macd_sig   = MACD_SIGNAL,
+                    st_period=SUPERTREND_PERIOD,
+                    st_mult=SUPERTREND_MULTIPLIER,
+                    rsi_period=RSI_PERIOD,
+                    rsi_low=RSI_LOW,
+                    rsi_high=RSI_HIGH,
+                    macd_fast=MACD_FAST,
+                    macd_slow=MACD_SLOW,
+                    macd_sig=MACD_SIGNAL,
                 )
+                atr = float(compute_atr(df["high"], df["low"], df["close"]).iloc[-1])
+                signal = int(signals.iloc[-1])
+                signal_price = float(df["close"].iloc[-1])
 
-                current_signal = int(signals.iloc[-1])
-                current_atr    = compute_atr(
-                    df["high"], df["low"], df["close"]
-                ).iloc[-1]
-
-                signal_label = {1: "LONG ▲", -1: "SHORT ▼", 0: "FLAT —"}
                 logger.info(
-                    f"  {symbol} | Sinal: {signal_label[current_signal]} | "
-                    f"ATR: {current_atr:.4f}"
+                    "%s | sinal=%s | close sinal=%.8f | ATR=%.8f",
+                    symbol,
+                    "LONG" if signal == 1 else "EXIT/FLAT",
+                    signal_price,
+                    atr,
                 )
 
-                # Fechar posição se sinal reverteu
-                if symbol in self.positions:
-                    pos_dir = 1 if self.positions[symbol]["side"] == "LONG" else -1
-                    if current_signal != pos_dir:
-                        self._close_position(symbol, "Signal reversal")
+                # Spot: -1 nunca abre short; qualquer sinal diferente de LONG fecha.
+                if symbol in self.positions and signal != 1:
+                    self._close_position(symbol, "Signal reversal/flat")
+                elif symbol not in self.positions and signal == 1:
+                    self._open_position(symbol, atr, signal_price)
 
-                # Abrir nova posição se há sinal e nenhuma posição aberta
-                if symbol not in self.positions and current_signal != 0:
-                    if len(self.positions) < MAX_SIMULTANEOUS_POS:
-                        self._open_position(symbol, current_signal, allocation, current_atr)
-                    else:
-                        logger.info(f"  {symbol}: máx de posições simultâneas atingido ({MAX_SIMULTANEOUS_POS}).")
+            except Exception as exc:
+                logger.error("Erro no ciclo %s: %s", symbol, exc, exc_info=True)
 
-            except Exception as e:
-                logger.error(f"Erro no ciclo de {symbol}: {e}", exc_info=True)
+        final_capital = self._get_current_capital()
+        self.risk_manager.update_peak(final_capital)
+        self.risk_manager.check_circuit_breaker(final_capital)
+        self.risk_manager.check_max_drawdown(final_capital)
+        logger.info("Risco: %s", self.risk_manager.status(final_capital))
 
-        logger.info(
-            f"📂 Posições abertas: {len(self.positions)}/{MAX_SIMULTANEOUS_POS} | "
-            f"{list(self.positions.keys())}"
-        )
-
-    # ─── Loop de Execução ─────────────────────────────────────────────────────
-
-    def run(self) -> None:
-        """
-        Inicia o bot:
-          - Executa um ciclo imediato ao iniciar
-          - Agenda ciclos diários às 00:05 UTC
-          - Verifica SL/TP a cada 5 minutos
-        """
-        logger.info("🚀 Krypton TradeBot iniciado!")
-        logger.info(f"   Estratégia: Supertrend({SUPERTREND_PERIOD},{SUPERTREND_MULTIPLIER}) + RSI({RSI_PERIOD}) + MACD({MACD_FAST},{MACD_SLOW},{MACD_SIGNAL})")
-        logger.info(f"   Pares: {list(TRADING_PAIRS.keys())}")
-        logger.info(f"   Modo: {'TESTNET ⚠️  — NÃO opera com dinheiro real' if USE_TESTNET else 'PRODUÇÃO 🔴 — capital real em risco'}")
-
-        # Ciclo imediato ao iniciar
+    def run(self):
+        logger.info("Krypton iniciado | Live quote=%s | UTC", LIVE_QUOTE_ASSET)
         self.daily_cycle()
+        last_daily_run = datetime.now(timezone.utc).date()
+        logger.info("Próximo ciclo diário: 00:05 UTC")
 
-        # Agendamento diário às 00:05 UTC
-        schedule.every().day.at("00:05").do(self.daily_cycle)
-
-        logger.info("⏰ Próximo ciclo agendado: 00:05 UTC")
-        logger.info("   Verificando SL/TP a cada 5 minutos...")
-
+        # Não usamos schedule.every().day.at(): schedule 1.2.1 usa timezone local.
+        # O relógio é comparado explicitamente em UTC, independentemente do VPS.
         while True:
-            schedule.run_pending()
-            self._check_sl_tp()
-            time.sleep(300)  # 5 minutos
+            now = datetime.now(timezone.utc)
+            if now.hour == 0 and now.minute == 5 and last_daily_run != now.date():
+                self.daily_cycle()
+                last_daily_run = now.date()
+            self._check_orders_and_reconcile()
+            time.sleep(30)
 
 
-# ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    bot = TradeBot()
-    bot.run()
+    TradeBot().run()
