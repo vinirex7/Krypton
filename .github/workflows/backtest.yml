@@ -1,0 +1,31 @@
+name: Krypton Backtest and Walk-Forward
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run spot backtests
+        run: |
+          mkdir -p results
+          for s in SOLUSDT BTCUSDT ETHUSDT BNBUSDT; do
+            python backtest.py --symbol "$s" --start 2022-01-01 --end 2026-08-23 | tee "results/backtest_${s}.txt"
+          done
+      - name: Run walk-forward
+        run: python walk_forward.py --start 2022-01-01 --end 2026-08-23 | tee results/walk_forward.txt
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-backtest-results
+          path: results/
