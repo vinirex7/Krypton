@@ -1,33 +1,34 @@
-# ─── Segurança — NUNCA commitar ───────────────────────────────────────────────
+# Segurança — NUNCA commitar
 .env
 *.pem
 *.key
 
-# ─── Python ───────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 
-# ─── Ambientes virtuais ───────────────────────────────────────────────────────
+# Ambientes virtuais
 venv/
 .venv/
 env/
 ENV/
 
-# ─── Logs e dados gerados ─────────────────────────────────────────────────────
+# Logs, estado e dados gerados
 tradebot.log
 *.log
+krypton_state.db
 *.csv
 
-# ─── Build / distribuição ─────────────────────────────────────────────────────
+# Build / distribuição
 build/
 dist/
 *.egg-info/
 .eggs/
 
-# ─── IDEs e sistemas operacionais ────────────────────────────────────────────
+# IDEs e sistemas operacionais
 .vscode/
 .idea/
 *.swp
