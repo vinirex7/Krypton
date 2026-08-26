@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 import adaptive_portfolio as ap
+import backtest
 import deep_validation as dv
 import range_grid as rg
 import walk_forward as wf
@@ -19,6 +20,11 @@ from adaptive_ml import (
 )
 
 SYMBOLS = list(wf.BASE_WEIGHTS)
+
+# GitHub-hosted runners are geo-blocked by api.binance.com.  This is Binance's
+# official public market-data endpoint and is already used by the validated
+# forensic CI entrypoints.
+backtest.BINANCE_GLOBAL_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
 def _clean_metrics(metrics: dict) -> dict:
@@ -210,4 +216,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

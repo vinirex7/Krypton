@@ -17,7 +17,7 @@ from adaptive_portfolio import INITIAL_CAPITAL, ROUND_TRIP_COST, as_utc, perform
 from config import ENTRY_SLIPPAGE_PCT, EXIT_SLIPPAGE_PCT, FEE_RATE
 from indicators import compute_atr
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000,
                "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
@@ -210,4 +210,3 @@ def simulate_range_grid(
     daily_equity = hourly_equity.resample("1D").last().dropna()
     return {**performance_metrics(daily_equity), "equity_curve": daily_equity,
             "trade_log": pd.DataFrame(trades), "fills": len(trades), "active_hours": active_hours}
-
