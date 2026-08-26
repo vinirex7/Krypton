@@ -1,10 +1,13 @@
 """Multiple-testing-safe Krypton research entrypoint.
 
-This intentionally delegates to research_validation, which persists every
-candidate to config_search_results.csv and reports Deflated Sharpe Ratio plus
-White's Reality Check before touching the locked reserve.
+Canonical research flow:
+- saves every tested candidate;
+- applies concentration as a hard promotion gate;
+- skips Stage 6 when no regime is eligible;
+- keeps the reserve locked unless --open-reserve is explicitly supplied;
+- reports Deflated Sharpe Ratio and White's Reality Check.
 """
-from research_validation import main
+from selection_pipeline import main
 
 
 if __name__ == "__main__":
