@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from research_metrics import concentration_metrics, deflated_sharpe_ratio, white_reality_check
+from selection_pipeline import choose_regime
 
 
 class ResearchMetricsTests(unittest.TestCase):
@@ -34,6 +35,28 @@ class ResearchMetricsTests(unittest.TestCase):
         self.assertEqual(out1["winner"], "a")
         self.assertGreaterEqual(out1["p_value"], 0.0)
         self.assertLessEqual(out1["p_value"], 1.0)
+
+    def test_choose_regime_warns_but_does_not_hard_reject_concentration(self):
+        summary = pd.DataFrame([
+            {"candidate": "regime_btc", "median_return": 0.05, "mean_sharpe": 0.9, "concentration_pass": False},
+            {"candidate": "regime_breadth", "median_return": 0.06, "mean_sharpe": 0.6, "concentration_pass": False},
+            {"candidate": "regime_individual", "median_return": 0.04, "mean_sharpe": 0.7, "concentration_pass": False},
+        ])
+        choice = choose_regime(summary)
+        self.assertEqual(choice["winner"], "regime_breadth")
+        self.assertFalse(choice["has_concentration_clean_candidate"])
+        self.assertIsNotNone(choice["warning"])
+
+    def test_choose_regime_prefers_concentration_clean_pool(self):
+        summary = pd.DataFrame([
+            {"candidate": "regime_btc", "median_return": 0.07, "mean_sharpe": 1.0, "concentration_pass": False},
+            {"candidate": "regime_breadth", "median_return": 0.05, "mean_sharpe": 0.7, "concentration_pass": True},
+            {"candidate": "regime_individual", "median_return": 0.04, "mean_sharpe": 0.8, "concentration_pass": True},
+        ])
+        choice = choose_regime(summary)
+        self.assertEqual(choice["winner"], "regime_breadth")
+        self.assertTrue(choice["has_concentration_clean_candidate"])
+        self.assertIsNone(choice["warning"])
 
 
 if __name__ == "__main__":
