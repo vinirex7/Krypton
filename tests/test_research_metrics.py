@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from research_metrics import concentration_metrics, deflated_sharpe_ratio, white_reality_check
+from selection_pipeline import concentration_gate
 
 
 class ResearchMetricsTests(unittest.TestCase):
@@ -34,6 +35,28 @@ class ResearchMetricsTests(unittest.TestCase):
         self.assertEqual(out1["winner"], "a")
         self.assertGreaterEqual(out1["p_value"], 0.0)
         self.assertLessEqual(out1["p_value"], 1.0)
+
+    def test_concentration_gate_rejects_when_every_candidate_fails(self):
+        summary = pd.DataFrame([
+            {"candidate": "regime_btc", "median_return": 0.05, "mean_sharpe": 0.9, "concentration_pass": False},
+            {"candidate": "regime_breadth", "median_return": 0.06, "mean_sharpe": 0.6, "concentration_pass": False},
+            {"candidate": "regime_individual", "median_return": 0.04, "mean_sharpe": 0.7, "concentration_pass": False},
+        ])
+        gate = concentration_gate(summary)
+        self.assertFalse(gate["passed"])
+        self.assertIsNone(gate["winner"])
+        self.assertEqual(gate["provisional"], "regime_breadth")
+
+    def test_concentration_gate_only_selects_eligible_candidates(self):
+        summary = pd.DataFrame([
+            {"candidate": "regime_btc", "median_return": 0.07, "mean_sharpe": 1.0, "concentration_pass": False},
+            {"candidate": "regime_breadth", "median_return": 0.05, "mean_sharpe": 0.7, "concentration_pass": True},
+            {"candidate": "regime_individual", "median_return": 0.04, "mean_sharpe": 0.8, "concentration_pass": True},
+        ])
+        gate = concentration_gate(summary)
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["winner"], "regime_breadth")
+        self.assertEqual(gate["provisional"], "regime_btc")
 
 
 if __name__ == "__main__":
