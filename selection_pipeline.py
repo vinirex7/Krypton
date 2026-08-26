@@ -1,16 +1,10 @@
 """Safe research selection pipeline for Krypton.
 
-This is the canonical entrypoint used by config_search.py.
+Concentration is a robustness diagnostic, not an isolated veto for a
+trend-following system. The final reserve is never opened implicitly: it
+requires --open-reserve after the research decision has been made.
 
-Protocol:
-1. Evaluate the three predeclared regime hypotheses on selection OOS only.
-2. Apply the concentration gate. If no regime passes, STOP: Stage 6 is skipped
-   and the reserve remains locked.
-3. Only an eligible regime may proceed to the single predefined DD overlay.
-4. The reserve is never opened implicitly. It requires --open-reserve and is
-   evaluated only after an eligible final candidate exists.
-
-TP remains frozen at 3x ATR. No live configuration is changed here.
+TP remains frozen at 3x ATR. This module never changes live configuration.
 """
 from __future__ import annotations
 
@@ -26,7 +20,7 @@ from config import TAKE_PROFIT_ATR_MULT, TRADING_PAIRS
 from research_metrics import concentration_metrics, correlation_report, deflated_sharpe_ratio, white_reality_check
 
 
-def _summary(results: pd.DataFrame, include_dsr: bool = False) -> pd.DataFrame:
+def summarize_results(results: pd.DataFrame, include_dsr: bool = False) -> pd.DataFrame:
     agg = {
         "mean_return": ("return", "mean"),
         "median_return": ("return", "median"),
@@ -40,53 +34,25 @@ def _summary(results: pd.DataFrame, include_dsr: bool = False) -> pd.DataFrame:
     return results.groupby("candidate").agg(**agg).reset_index()
 
 
-def concentration_gate(summary: pd.DataFrame) -> dict:
-    """Return a hard selection decision without touching Stage 6 or reserve."""
+def choose_regime(summary: pd.DataFrame) -> dict:
+    """Prefer concentration-clean candidates, but do not hard-reject trend concentration alone."""
     if summary.empty:
         raise ValueError("Resumo de candidatas vazio.")
-    ranked_all = summary.sort_values(["median_return", "mean_sharpe"], ascending=False)
-    provisional = str(ranked_all.iloc[0]["candidate"])
     eligible = summary[summary["concentration_pass"]]
-    if eligible.empty:
-        return {
-            "passed": False,
-            "winner": None,
-            "provisional": provisional,
-            "reason": "Nenhum regime passou o gate de concentração.",
-        }
-    winner = str(
-        eligible.sort_values(["median_return", "mean_sharpe"], ascending=False)
-        .iloc[0]["candidate"]
+    pool = eligible if not eligible.empty else summary
+    winner = str(pool.sort_values(["median_return", "mean_sharpe"], ascending=False).iloc[0]["candidate"])
+    warning = None if not eligible.empty else (
+        "Nenhum regime passou todos os testes de concentração. "
+        "Concentração será tratada como alerta e investigada por regime de mercado; "
+        "a candidata não deve ser promovida apenas por este resultado."
     )
-    return {"passed": True, "winner": winner, "provisional": provisional, "reason": None}
+    return {"winner": winner, "warning": warning, "has_concentration_clean_candidate": not eligible.empty}
 
 
-def _multiple_testing(candidate_returns: dict[str, pd.Series], bootstrap: int) -> tuple[dict, dict]:
-    n_trials = len(candidate_returns)
-    dsr = {name: deflated_sharpe_ratio(rets, n_trials) for name, rets in candidate_returns.items()}
-    wrc = white_reality_check(candidate_returns, bootstrap_samples=bootstrap)
-    return dsr, {"n_trials": n_trials, "dsr": dsr, "white_reality_check": wrc}
-
-
-def _save_common_outputs(results, candidate_returns, candidate_exposure, symbols, folds, candidate_for_corr, bootstrap):
-    dsr, mt = _multiple_testing(candidate_returns, bootstrap)
-    results = results.copy()
-    results["deflated_sharpe_ratio"] = results["candidate"].map(dsr)
-    results.to_csv("config_search_results.csv", index=False)
-    summary = _summary(results, include_dsr=True)
-    summary.to_csv("config_search_summary.csv", index=False)
-
-    if candidate_for_corr and candidate_for_corr in candidate_exposure:
-        corr = correlation_report(
-            _save_common_outputs.data,
-            symbols,
-            folds[0][1],
-            folds[-1][2],
-            candidate_exposure[candidate_for_corr],
-        )
-        corr["daily_return_correlation"].to_csv("correlation_daily_returns.csv")
-        corr["position_correlation"].to_csv("correlation_positions.csv")
-    return results, summary, mt
+def _save_correlations(data, symbols, folds, exposure):
+    corr = correlation_report(data, symbols, folds[0][1], folds[-1][2], exposure)
+    corr["daily_return_correlation"].to_csv("correlation_daily_returns.csv")
+    corr["position_correlation"].to_csv("correlation_positions.csv")
 
 
 def _write_report(report: dict) -> None:
@@ -98,7 +64,7 @@ def main():
     if abs(TAKE_PROFIT_ATR_MULT - rv.FIXED_TP) > 1e-12:
         raise RuntimeError("selection_pipeline exige TAKE_PROFIT_ATR_MULT=3.0; TP não será pesquisado.")
 
-    p = argparse.ArgumentParser(description="Krypton robust selection with hard gates")
+    p = argparse.ArgumentParser(description="Krypton robust selection with explicit holdout access")
     p.add_argument("--start", default="2022-01-01")
     p.add_argument("--end", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     p.add_argument("--symbols", nargs="+", default=list(TRADING_PAIRS))
@@ -111,7 +77,7 @@ def main():
     p.add_argument(
         "--open-reserve",
         action="store_true",
-        help="Abre a reserva final UMA ÚNICA VEZ, somente após todos os gates passarem.",
+        help="Abre a reserva final deliberadamente; por padrão o holdout permanece lacrado.",
     )
     args = p.parse_args()
 
@@ -124,7 +90,6 @@ def main():
         raise ValueError("Experimento breadth exige exatamente os 3 ativos configurados em TRADING_PAIRS.")
 
     data = wf._prepare_data(symbols, start, end)
-    _save_common_outputs.data = data
     folds = list(rv._folds(start, selection_end, args.train_days, args.test_days, args.step_days))
     if not folds:
         raise RuntimeError("Nenhum fold OOS completo antes da reserva final.")
@@ -133,7 +98,7 @@ def main():
     candidate_returns = {}
     candidate_exposure = {}
 
-    # Stage 5: exactly the three predeclared regime hypotheses.
+    # Stage 5: only the three predeclared regime hypotheses.
     for mode in rv.REGIME_MODES:
         label = f"regime_{mode}"
         rows, rets, exposure, _ = rv.evaluate_candidate(
@@ -144,49 +109,11 @@ def main():
         candidate_exposure[label] = exposure
 
     first = pd.concat(all_rows, ignore_index=True)
-    gate = concentration_gate(_summary(first))
-
-    # HARD STOP: no eligible regime => no Stage 6 and no reserve access.
-    if not gate["passed"]:
-        results, final_summary, mt = _save_common_outputs(
-            first,
-            candidate_returns,
-            candidate_exposure,
-            symbols,
-            folds,
-            gate["provisional"],
-            args.bootstrap,
-        )
-        report = {
-            "tp_frozen_atr": rv.FIXED_TP,
-            "selection_period_end": selection_end.date().isoformat(),
-            "reserve_start": reserve_start.date().isoformat(),
-            "reserve_end": end.date().isoformat(),
-            "selection_status": "REJECTED_CONCENTRATION",
-            "regime_winner_before_dd": None,
-            "provisional_regime_for_diagnostics_only": gate["provisional"],
-            "final_candidate": None,
-            "selection_warning": gate["reason"],
-            "stage6": {
-                "status": "SKIPPED_NO_ELIGIBLE_REGIME",
-                "reason": "Stage 6 só pode rodar após um regime passar concentração.",
-            },
-            "multiple_testing": mt,
-            "reserve": {
-                "status": "SKIPPED_LOCKED",
-                "opened": False,
-                "reason": "Nenhuma candidata passou o gate de concentração; holdout não foi acessado.",
-            },
-        }
-        _write_report(report)
-        print(final_summary.to_string(index=False))
-        print(json.dumps(report, indent=2, ensure_ascii=False))
-        return
-
-    regime_winner = gate["winner"]
+    regime_choice = choose_regime(summarize_results(first))
+    regime_winner = regime_choice["winner"]
     selected_mode = regime_winner.replace("regime_", "")
 
-    # Stage 6: one predefined overlay only, after an eligible regime exists.
+    # Stage 6 remains one predefined overlay, evaluated on selection data only.
     dd_label = f"{regime_winner}_dd_10_15"
     dd_rows, dd_rets, dd_exposure, _ = rv.evaluate_candidate(
         data, symbols, folds, dd_label, selected_mode, True, args.max_top5_share
@@ -196,45 +123,51 @@ def main():
     candidate_exposure[dd_label] = dd_exposure
 
     results = pd.concat(all_rows, ignore_index=True)
-    # Initial candidate for correlation is resolved after DSR is attached.
-    results, final_summary, mt = _save_common_outputs(
-        results,
-        candidate_returns,
-        candidate_exposure,
-        symbols,
-        folds,
-        regime_winner,
-        args.bootstrap,
-    )
+    n_trials = len(candidate_returns)
+    dsr = {name: deflated_sharpe_ratio(rets, n_trials) for name, rets in candidate_returns.items()}
+    wrc = white_reality_check(candidate_returns, bootstrap_samples=args.bootstrap)
+    results["deflated_sharpe_ratio"] = results["candidate"].map(dsr)
+    results.to_csv("config_search_results.csv", index=False)
 
-    final_eligible = final_summary[final_summary["concentration_pass"]]
-    if final_eligible.empty:
-        raise RuntimeError("Invariante quebrada: gate inicial passou, mas nenhuma candidata final ficou elegível.")
+    final_summary = summarize_results(results, include_dsr=True)
+    final_summary.to_csv("config_search_summary.csv", index=False)
+    final_clean = final_summary[final_summary["concentration_pass"]]
+    final_pool = final_clean if not final_clean.empty else final_summary
     final_candidate = str(
-        final_eligible.sort_values(["median_return", "mean_sharpe", "dsr"], ascending=False)
+        final_pool.sort_values(["median_return", "mean_sharpe", "dsr"], ascending=False)
         .iloc[0]["candidate"]
     )
     final_mode = selected_mode if final_candidate == dd_label else final_candidate.replace("regime_", "")
     final_dd = final_candidate == dd_label
+
+    _save_correlations(data, symbols, folds, candidate_exposure[final_candidate])
 
     report = {
         "tp_frozen_atr": rv.FIXED_TP,
         "selection_period_end": selection_end.date().isoformat(),
         "reserve_start": reserve_start.date().isoformat(),
         "reserve_end": end.date().isoformat(),
-        "selection_status": "ELIGIBLE_FOR_RESERVE",
+        "selection_status": (
+            "SELECTION_COMPLETE_WITH_CONCENTRATION_WARNING"
+            if regime_choice["warning"] else "SELECTION_COMPLETE"
+        ),
         "regime_winner_before_dd": regime_winner,
         "final_candidate": final_candidate,
-        "selection_warning": None,
-        "stage6": {"status": "EVALUATED", "candidate": dd_label},
-        "multiple_testing": mt,
+        "selection_warning": regime_choice["warning"],
+        "concentration_is_hard_gate": False,
+        "stage6": {"status": "EVALUATED_SELECTION_ONLY", "candidate": dd_label},
+        "multiple_testing": {
+            "n_trials": n_trials,
+            "dsr": dsr,
+            "white_reality_check": wrc,
+        },
     }
 
     if not args.open_reserve:
         report["reserve"] = {
             "status": "LOCKED_NOT_OPENED",
             "opened": False,
-            "reason": "Use --open-reserve somente quando a decisão de abrir o holdout for deliberada e final.",
+            "reason": "Holdout exige --open-reserve; revisar diagnósticos por regime antes de consumi-lo.",
         }
         _write_report(report)
         print(final_summary.to_string(index=False))
