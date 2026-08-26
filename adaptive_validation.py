@@ -146,7 +146,9 @@ def run(start, end, mc_runs: int = 2000) -> dict:
     winner, checks = _select_candidate(periods)
     selected_curve = curves[winner] if winner else curves["baseline"]
     mc = dv.block_bootstrap_monte_carlo(selected_curve.pct_change().dropna(), runs=mc_runs, seed=42)
-    dqn_audit = audit_dqn_reward_timing(data["BTCUSDT"]["df"].loc[as_utc(start):as_utc(end)])
+    dqn_audit = audit_dqn_reward_timing(
+        data["BTCUSDT"]["df"].loc[ap.as_utc(start):ap.as_utc(end)]
+    )
 
     # Auditable outputs.
     periods.to_csv("adaptive_period_results.csv", index=False)
