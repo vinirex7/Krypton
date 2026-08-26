@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'research_*.py'
+      - 'regime_diagnostics.py'
+      - 'selection_pipeline.py'
       - 'execution_audit.py'
       - 'config_search.py'
       - 'tests/**'
@@ -21,6 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Compile research modules
-        run: python -m py_compile execution_audit.py research_metrics.py research_validation.py config_search.py
+        run: >-
+          python -m py_compile
+          execution_audit.py research_metrics.py research_validation.py
+          selection_pipeline.py regime_diagnostics.py config_search.py
       - name: Run deterministic tests
         run: python -m unittest discover -s tests -v
