@@ -65,15 +65,24 @@ class RiskManager:
             or self.check_circuit_breaker(current_capital)
         )
 
-    def calculate_position_size(self, capital: float, entry_price: float, atr: float) -> dict:
-        """1% do capital TOTAL; nunca permite notional maior que o capital disponível."""
+    def calculate_position_size(
+        self,
+        capital: float,
+        entry_price: float,
+        atr: float,
+        allocation_pct: float = 1.0,
+        available_cash: float | None = None,
+    ) -> dict:
+        """Arrisca sobre a equity, limitado pelo peso do ativo e caixa livre."""
         sl_distance = atr * STOP_LOSS_ATR_MULT
         tp_distance = atr * TAKE_PROFIT_ATR_MULT
         risk_amount = capital * RISK_PER_TRADE
         quantity = risk_amount / sl_distance if sl_distance > 0 else 0.0
 
-        # Cap explícito de notional: Spot não pode comprar acima do caixa disponível.
-        max_quantity = capital / entry_price if entry_price > 0 else 0.0
+        allocation_cap = capital * max(min(allocation_pct, 1.0), 0.0)
+        cash_cap = capital if available_cash is None else max(available_cash, 0.0)
+        max_notional = min(allocation_cap, cash_cap)
+        max_quantity = max_notional / entry_price if entry_price > 0 else 0.0
         quantity = min(quantity, max_quantity)
 
         return {
@@ -86,6 +95,27 @@ class RiskManager:
             "rr_ratio": tp_distance / sl_distance if sl_distance > 0 else 0.0,
             "notional": quantity * entry_price,
         }
+
+    def snapshot(self) -> dict:
+        return {
+            "initial_capital": self.initial_capital,
+            "peak_capital": self.peak_capital,
+            "daily_start_cap": self.daily_start_cap,
+            "daily_date": self.daily_date.isoformat() if self.daily_date else None,
+            "halted": self.halted,
+            "circuit_breaker": self.circuit_breaker,
+        }
+
+    def restore(self, state: dict) -> None:
+        from datetime import date
+
+        self.initial_capital = float(state.get("initial_capital", self.initial_capital))
+        self.peak_capital = max(float(state.get("peak_capital", self.peak_capital)), self.peak_capital)
+        self.daily_start_cap = float(state.get("daily_start_cap", self.daily_start_cap))
+        raw_date = state.get("daily_date")
+        self.daily_date = date.fromisoformat(raw_date) if raw_date else None
+        self.halted = bool(state.get("halted", False))
+        self.circuit_breaker = bool(state.get("circuit_breaker", False))
 
     def status(self, current_capital: float) -> dict:
         dd = (

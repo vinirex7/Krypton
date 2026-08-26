@@ -7,14 +7,14 @@ Properties
 - Spot LONG-only.
 - Signal on candle close, execution on next candle open.
 - SL/TP use low/high; SL wins if both are touched in the same candle.
-- Entry/exit fees and 5 bps entry slippage included.
+- Entry/exit fees, slippage and adverse gaps included.
 - Risk is configurable and calculated from TOTAL portfolio equity.
 - Notional is capped by available cash and normalized portfolio allocation.
 - Portfolio-level simultaneous-position cap, circuit breaker and max-DD halt.
 - Optional BTC 200-day SMA regime filter blocks new entries in risk-off regimes.
 - TP is selected only on each training window and frozen for the next OOS window.
 
-Live uses U; historical validation uses USDT pairs.
+Live and historical validation use the same USDT pairs.
 """
 
 import argparse
@@ -28,35 +28,33 @@ import backtest
 from config import (
     CIRCUIT_BREAKER_PCT,
     FEE_RATE,
+    ENTRY_SLIPPAGE_PCT,
+    EXIT_SLIPPAGE_PCT,
     MACD_FAST,
     MACD_SIGNAL,
     MACD_SLOW,
     MAX_DRAWDOWN_PCT,
     MAX_SIMULTANEOUS_POS,
     RISK_PER_TRADE,
+    REGIME_FILTER,
     RSI_HIGH,
     RSI_LOW,
     RSI_PERIOD,
     STOP_LOSS_ATR_MULT,
     SUPERTREND_MULTIPLIER,
     SUPERTREND_PERIOD,
+    TRADING_PAIRS,
 )
 from indicators import compute_atr, compute_signals
 
 INITIAL_CAPITAL = 10_000.0
-ENTRY_SLIPPAGE_PCT = 0.0005
 DEFAULT_CANDIDATE_TP = [3.0, 4.0, 4.5, 5.0]
 TRAIN_DAYS = 365
 TEST_DAYS = 180
 STEP_DAYS = 180
 MIN_NOTIONAL = 10.0
 
-BASE_WEIGHTS = {
-    "SOLUSDT": 0.25,
-    "BTCUSDT": 0.40,
-    "ETHUSDT": 0.20,
-    "BNBUSDT": 0.15,
-}
+BASE_WEIGHTS = dict(TRADING_PAIRS)
 
 
 @dataclass
@@ -67,6 +65,8 @@ class Position:
     stop_loss: float
     take_profit: float
     entry_time: pd.Timestamp
+    entry_fee: float
+    equity_at_entry: float
 
 
 def normalized_weights(symbols: list[str]) -> dict[str, float]:
@@ -116,12 +116,14 @@ def _prepare_data(symbols: list[str], start: datetime, end: datetime):
     return data
 
 
-def _portfolio_mark_to_market(cash: float, positions: dict[str, Position], data, ts) -> float:
+def _portfolio_mark_to_market(
+    cash: float, positions: dict[str, Position], data, ts, price_field: str = "close"
+) -> float:
     equity = cash
     for symbol, pos in positions.items():
         df = data[symbol]["df"]
         if ts in df.index:
-            px = float(df.loc[ts, "close"])
+            px = float(df.loc[ts, price_field])
         else:
             eligible = df.loc[:ts]
             px = pos.entry_price if eligible.empty else float(eligible["close"].iloc[-1])
@@ -176,12 +178,12 @@ def simulate_portfolio(
     if len(calendar) < 20:
         return {"return": 0.0, "trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
                 "max_drawdown": 0.0, "sharpe": 0.0, "final_capital": INITIAL_CAPITAL,
-                "halted": False}
+            "halted": False, "trade_log": pd.DataFrame(), "equity_curve": pd.Series(dtype=float)}
 
     cash = INITIAL_CAPITAL
     positions: dict[str, Position] = {}
     pending_entries: dict[str, float] = {}
-    trades = []
+    trades: list[dict] = []
     equity_points = []
     peak_equity = INITIAL_CAPITAL
     daily_start_equity = INITIAL_CAPITAL
@@ -189,12 +191,32 @@ def simulate_portfolio(
     halted = False
 
     for ts in calendar:
-        pre_equity = _portfolio_mark_to_market(cash, positions, data, ts)
+        pre_equity = _portfolio_mark_to_market(cash, positions, data, ts, price_field="open")
         if daily_date != ts.date():
             daily_date = ts.date()
             daily_start_equity = pre_equity
 
-        # Execute entries generated at the previous close.
+        # OPEN 1/2: exits generated at the previous close happen before intraday barriers.
+        for symbol in list(positions):
+            df = data[symbol]["df"]
+            sig = data[symbol]["signals"]
+            if ts not in df.index:
+                continue
+            loc = df.index.get_loc(ts)
+            if isinstance(loc, slice) or loc == 0:
+                continue
+            prev_ts = df.index[loc - 1]
+            if prev_ts >= start_ts and int(sig.loc[prev_ts]) != 1:
+                pos = positions[symbol]
+                exit_price = float(df.loc[ts, "open"]) * (1.0 - EXIT_SLIPPAGE_PCT)
+                cash, pnl = _exit_position(cash, pos, exit_price)
+                trades.append({"symbol": symbol, "entry_time": pos.entry_time,
+                               "exit_time": ts, "pnl": pnl,
+                               "portfolio_return": pnl / pos.equity_at_entry,
+                               "reason": "Sig"})
+                positions.pop(symbol, None)
+
+        # OPEN 2/2: execute entries generated at the previous close.
         for symbol in list(pending_entries):
             if halted or len(positions) >= MAX_SIMULTANEOUS_POS or symbol in positions:
                 pending_entries.pop(symbol, None)
@@ -202,7 +224,7 @@ def simulate_portfolio(
             df = data[symbol]["df"]
             if ts not in df.index:
                 continue
-            current_equity = _portfolio_mark_to_market(cash, positions, data, ts)
+            current_equity = _portfolio_mark_to_market(cash, positions, data, ts, price_field="open")
             daily_loss = ((daily_start_equity - current_equity) / daily_start_equity
                           if daily_start_equity > 0 else 0.0)
             if daily_loss >= CIRCUIT_BREAKER_PCT:
@@ -236,6 +258,8 @@ def simulate_portfolio(
                 stop_loss=entry_price - sl_distance,
                 take_profit=entry_price + tp_distance,
                 entry_time=ts,
+                entry_fee=entry_fee,
+                equity_at_entry=current_equity,
             )
 
         # Intraday exits. Conservative ordering: SL before TP.
@@ -245,32 +269,23 @@ def simulate_portfolio(
                 continue
             row = df.loc[ts]
             pos = positions[symbol]
-            hit_sl = float(row["low"]) <= pos.stop_loss
-            hit_tp = float(row["high"]) >= pos.take_profit
-            if hit_sl or hit_tp:
-                reason = "SL" if hit_sl else "TP"
-                exit_price = pos.stop_loss if hit_sl else pos.take_profit
+            open_price = float(row["open"])
+            if open_price <= pos.stop_loss:
+                reason, exit_price = "SL_GAP", open_price * (1.0 - EXIT_SLIPPAGE_PCT)
+            elif open_price >= pos.take_profit:
+                reason, exit_price = "TP_GAP", pos.take_profit
+            elif float(row["low"]) <= pos.stop_loss:
+                reason, exit_price = "SL", pos.stop_loss * (1.0 - EXIT_SLIPPAGE_PCT)
+            elif float(row["high"]) >= pos.take_profit:
+                reason, exit_price = "TP", pos.take_profit
+            else:
+                continue
+            if reason:
                 cash, pnl = _exit_position(cash, pos, exit_price)
                 trades.append({"symbol": symbol, "entry_time": pos.entry_time,
-                               "exit_time": ts, "pnl": pnl, "reason": reason})
-                positions.pop(symbol, None)
-
-        # Signal exits: previous close -> current open.
-        for symbol in list(positions):
-            df = data[symbol]["df"]
-            sig = data[symbol]["signals"]
-            if ts not in df.index:
-                continue
-            loc = df.index.get_loc(ts)
-            if isinstance(loc, slice) or loc == 0:
-                continue
-            prev_ts = df.index[loc - 1]
-            if prev_ts >= start_ts and int(sig.loc[prev_ts]) != 1:
-                pos = positions[symbol]
-                exit_price = float(df.loc[ts, "open"])
-                cash, pnl = _exit_position(cash, pos, exit_price)
-                trades.append({"symbol": symbol, "entry_time": pos.entry_time,
-                               "exit_time": ts, "pnl": pnl, "reason": "Sig"})
+                               "exit_time": ts, "pnl": pnl,
+                               "portfolio_return": pnl / pos.equity_at_entry,
+                               "reason": reason})
                 positions.pop(symbol, None)
 
         current_equity = _portfolio_mark_to_market(cash, positions, data, ts)
@@ -317,11 +332,13 @@ def simulate_portfolio(
         if df.empty:
             continue
         exit_ts = df.index[-1]
-        exit_price = float(df["close"].iloc[-1])
+        exit_price = float(df["close"].iloc[-1]) * (1.0 - EXIT_SLIPPAGE_PCT)
         pos = positions[symbol]
         cash, pnl = _exit_position(cash, pos, exit_price)
         trades.append({"symbol": symbol, "entry_time": pos.entry_time,
-                       "exit_time": exit_ts, "pnl": pnl, "reason": "EOD"})
+                       "exit_time": exit_ts, "pnl": pnl,
+                       "portfolio_return": pnl / pos.equity_at_entry,
+                       "reason": "EOD"})
         positions.pop(symbol, None)
 
     final_equity = cash
@@ -352,6 +369,8 @@ def simulate_portfolio(
         "sharpe": float(sharpe),
         "final_capital": final_equity,
         "halted": halted,
+        "trade_log": pd.DataFrame(trades),
+        "equity_curve": eq,
     }
 
 
@@ -374,7 +393,7 @@ def _choose_tp(data, symbols, train_start, train_end, candidate_tp,
 def run_walk_forward(data, symbols, start, end, train_days=TRAIN_DAYS,
                      test_days=TEST_DAYS, step_days=STEP_DAYS,
                      candidate_tp=None, risk_per_trade=RISK_PER_TRADE,
-                     regime_filter=False, label="baseline"):
+                     regime_filter=REGIME_FILTER, label="baseline"):
     candidate_tp = candidate_tp or DEFAULT_CANDIDATE_TP
     weights = normalized_weights(symbols)
     rows = []
@@ -448,13 +467,14 @@ def main():
     parser = argparse.ArgumentParser(description="Krypton rolling walk-forward validation")
     parser.add_argument("--start", default="2022-01-01")
     parser.add_argument("--end", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    parser.add_argument("--symbols", nargs="+", default=["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"])
+    parser.add_argument("--symbols", nargs="+", default=list(TRADING_PAIRS))
     parser.add_argument("--train-days", type=int, default=TRAIN_DAYS)
     parser.add_argument("--test-days", type=int, default=TEST_DAYS)
     parser.add_argument("--step-days", type=int, default=STEP_DAYS)
     parser.add_argument("--risk", type=float, default=RISK_PER_TRADE, help="Risco por trade; ex. 0.005 = 0,5%")
     parser.add_argument("--candidate-tp", nargs="+", type=float, default=DEFAULT_CANDIDATE_TP)
-    parser.add_argument("--regime-filter", action="store_true", help="Só abre novas posições quando BTC > SMA200")
+    parser.add_argument("--regime-filter", action=argparse.BooleanOptionalAction, default=REGIME_FILTER,
+                        help="Só abre novas posições quando BTC > SMA200")
     args = parser.parse_args()
 
     start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -483,7 +503,7 @@ def main():
         print(f"Folds lucrativos: {s['profitable_folds']}/{s['folds']} ({s['profitable_pct']:.1%})")
         print(f"Retorno OOS médio/fold: {s['mean_return']:+.2%}")
         print(f"Retorno OOS mediano/fold: {s['median_return']:+.2%}")
-        print(f"Retorno OOS composto: {s['compounded_return']:+.2%}")
+        print(f"Produto das janelas OOS (não contínuo): {s['compounded_return']:+.2%}")
         print(f"Sharpe OOS médio: {s['mean_sharpe']:.3f}")
         print(f"Pior drawdown OOS: {s['worst_drawdown']:.2%}")
         print(f"Win rate OOS médio: {s['mean_win_rate']:.1%}")

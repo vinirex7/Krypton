@@ -22,6 +22,8 @@ import yfinance as yf
 from config import (
     CIRCUIT_BREAKER_PCT,
     FEE_RATE,
+    ENTRY_SLIPPAGE_PCT,
+    EXIT_SLIPPAGE_PCT,
     MACD_FAST,
     MACD_SIGNAL,
     MACD_SLOW,
@@ -44,7 +46,6 @@ BINANCE_US_SYMBOL_MAP = {"SOLUSDT": "SOLUSD", "BTCUSDT": "BTCUSD", "ETHUSDT": "E
 YAHOO_SYMBOL_MAP = {"SOLUSDT": "SOL-USD", "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "BNBUSDT": "BNB-USD"}
 WARMUP_DAYS = 300
 INITIAL_CAPITAL = 10_000.0
-ENTRY_SLIPPAGE_PCT = 0.0005
 
 
 def _date_to_ms(value: str) -> int:
@@ -115,12 +116,14 @@ def get_ohlcv_yahoo(symbol: str, start_str: str, end_str: str | None = None) -> 
     return df[required].dropna()
 
 
-def get_ohlcv(symbol: str, start_str: str, end_str: str | None = None) -> tuple[pd.DataFrame, str]:
-    sources = [
-        ("Binance Global", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_GLOBAL_URL)),
-        ("Binance US", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_US_URL, BINANCE_US_SYMBOL_MAP)),
-        ("Yahoo Finance", lambda: get_ohlcv_yahoo(symbol, start_str, end_str)),
-    ]
+def get_ohlcv(symbol: str, start_str: str, end_str: str | None = None, allow_proxy_data: bool = False) -> tuple[pd.DataFrame, str]:
+    """Carrega o mercado exato da Binance; proxies USD são opt-in e claramente rotulados."""
+    sources = [("Binance Global Spot", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_GLOBAL_URL))]
+    if allow_proxy_data:
+        sources += [
+            ("PROXY Binance US USD", lambda: get_ohlcv_binance(symbol, start_str, end_str, BINANCE_US_URL, BINANCE_US_SYMBOL_MAP)),
+            ("PROXY Yahoo USD", lambda: get_ohlcv_yahoo(symbol, start_str, end_str)),
+        ]
     best_df = pd.DataFrame()
     best_source = "nenhuma fonte"
     for source_name, loader in sources:
@@ -139,10 +142,31 @@ def _buy_execution_price(open_price: float) -> float:
     return open_price * (1.0 + ENTRY_SLIPPAGE_PCT)
 
 
-def _exit_trade(position: dict, exit_price: float) -> float:
-    gross_pnl = position["quantity"] * (exit_price - position["entry_price"])
-    exit_fee = position["quantity"] * exit_price * FEE_RATE
-    return gross_pnl - exit_fee
+def _sell_execution_price(price: float) -> float:
+    return price * (1.0 - EXIT_SLIPPAGE_PCT)
+
+
+def _barrier_exit(row: pd.Series, position: dict) -> tuple[float, str] | None:
+    """Modela gaps e mantém prioridade conservadora do SL quando ambos são tocados."""
+    open_price = float(row["open"])
+    if open_price <= position["sl"]:
+        return _sell_execution_price(open_price), "SL_GAP"
+    if open_price >= position["tp"]:
+        return position["tp"], "TP_GAP"
+    hit_sl = float(row["low"]) <= position["sl"]
+    hit_tp = float(row["high"]) >= position["tp"]
+    if hit_sl:
+        return _sell_execution_price(position["sl"]), "SL"
+    if hit_tp:
+        return position["tp"], "TP"
+    return None
+
+
+def _close_position(cash: float, position: dict, exit_price: float) -> tuple[float, float]:
+    proceeds = position["quantity"] * exit_price
+    exit_fee = proceeds * FEE_RATE
+    pnl = proceeds - exit_fee - position["cost_basis"]
+    return cash + proceeds - exit_fee, pnl
 
 
 def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
@@ -181,76 +205,79 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
         print("❌ Período de backtest muito curto.")
         return {}
 
-    capital = INITIAL_CAPITAL
-    peak = capital
+    cash = INITIAL_CAPITAL
+    peak = INITIAL_CAPITAL
     equity = []
     trades = []
     position = None
     halted = False
-    daily_start_capital = capital
+    daily_start_equity = INITIAL_CAPITAL
     daily_date = None
     entry_pending = None
 
     def reset_day(day):
-        nonlocal daily_start_capital, daily_date
+        nonlocal daily_start_equity, daily_date
         if daily_date != day:
             daily_date = day
-            daily_start_capital = capital
+            daily_start_equity = current_equity
 
     def circuit_breaker_active():
-        if daily_start_capital <= 0:
+        if daily_start_equity <= 0:
             return False
-        return (daily_start_capital - capital) / daily_start_capital >= CIRCUIT_BREAKER_PCT
+        return (daily_start_equity - current_equity) / daily_start_equity >= CIRCUIT_BREAKER_PCT
 
     for i in range(len(df)):
         row = df.iloc[i]
+        current_equity = cash + (position["quantity"] * float(row["open"]) if position else 0.0)
         reset_day(df.index[i].date())
 
-        # Sinal no close anterior -> execução no OPEN atual.
+        # Eventos no OPEN: primeiro sai pelo sinal conhecido desde o close anterior.
+        if position is not None and i > 0 and int(signals.iloc[i - 1]) != 1:
+            exit_price = _sell_execution_price(float(row["open"]))
+            cash, pnl = _close_position(cash, position, exit_price)
+            trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": pnl, "exit_reason": "Sig"})
+            position = None
+
+        current_equity = cash + (position["quantity"] * float(row["open"]) if position else 0.0)
+
+        # Depois executa entradas geradas no close anterior.
         if entry_pending is not None and position is None and not halted and not circuit_breaker_active():
             entry_atr = entry_pending["atr"]
             entry = _buy_execution_price(float(row["open"]))
             sl_distance = entry_atr * STOP_LOSS_ATR_MULT
             tp_distance = entry_atr * TAKE_PROFIT_ATR_MULT
             if sl_distance > 0 and pd.notna(entry_atr):
-                risk_amount = capital * RISK_PER_TRADE
+                risk_amount = current_equity * RISK_PER_TRADE
                 raw_qty = risk_amount / sl_distance
-                # Cap de notional: spot não pode assumir alavancagem implícita.
-                max_qty = capital / (entry * (1 + FEE_RATE))
+                max_qty = cash / (entry * (1 + FEE_RATE))
                 qty = min(raw_qty, max_qty)
                 notional = qty * entry
                 if qty > 0 and notional >= 10:
                     entry_fee = notional * FEE_RATE
-                    capital -= entry_fee
+                    cost_basis = notional + entry_fee
+                    cash -= cost_basis
                     position = {
                         "entry_price": entry,
                         "quantity": qty,
                         "sl": entry - sl_distance,
                         "tp": entry + tp_distance,
                         "entry_time": df.index[i],
+                        "cost_basis": cost_basis,
                     }
             entry_pending = None
 
-        # SL/TP usam LOW/HIGH. Se os dois forem tocados no mesmo candle, SL tem prioridade.
+        # Só depois do OPEN processa a faixa intradiária.
         if position is not None:
-            hit_sl = float(row["low"]) <= position["sl"]
-            hit_tp = float(row["high"]) >= position["tp"]
-            if hit_sl or hit_tp:
-                reason = "SL" if hit_sl else "TP"
-                exit_price = position["sl"] if hit_sl else position["tp"]
-                capital += _exit_trade(position, exit_price)
-                trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": _exit_trade(position, exit_price), "exit_reason": reason})
+            barrier = _barrier_exit(row, position)
+            if barrier:
+                exit_price, reason = barrier
+                cash, pnl = _close_position(cash, position, exit_price)
+                trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": pnl, "exit_reason": reason})
                 position = None
 
-        # Signal exit: sinal do CLOSE anterior executa no OPEN atual. SL/TP já tiveram prioridade.
-        if position is not None and i > 0 and int(signals.iloc[i - 1]) != 1:
-            exit_price = float(row["open"])
-            capital += _exit_trade(position, exit_price)
-            trades.append({"entry_time": position["entry_time"], "exit_time": df.index[i], "pnl": _exit_trade(position, exit_price), "exit_reason": "Sig"})
-            position = None
-
-        peak = max(peak, capital)
-        if peak > 0 and (peak - capital) / peak >= MAX_DRAWDOWN_PCT:
+        current_equity = cash + (position["quantity"] * float(row["close"]) if position else 0.0)
+        peak = max(peak, current_equity)
+        if peak > 0 and (peak - current_equity) / peak >= MAX_DRAWDOWN_PCT:
             halted = True
             entry_pending = None
 
@@ -258,18 +285,19 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
         if position is None and entry_pending is None and not halted and not circuit_breaker_active() and int(signals.iloc[i]) == 1 and pd.notna(atr.iloc[i]) and float(atr.iloc[i]) > 0 and i + 1 < len(df):
             entry_pending = {"atr": float(atr.iloc[i]), "signal_time": df.index[i]}
 
-        equity.append(capital)
+        equity.append(current_equity)
 
     if position is not None:
-        exit_price = float(df["close"].iloc[-1])
-        capital += _exit_trade(position, exit_price)
-        trades.append({"entry_time": position["entry_time"], "exit_time": df.index[-1], "pnl": _exit_trade(position, exit_price), "exit_reason": "EOD"})
-        equity[-1] = capital
+        exit_price = _sell_execution_price(float(df["close"].iloc[-1]))
+        cash, pnl = _close_position(cash, position, exit_price)
+        trades.append({"entry_time": position["entry_time"], "exit_time": df.index[-1], "pnl": pnl, "exit_reason": "EOD"})
+        equity[-1] = cash
 
     eq = pd.Series(equity, index=df.index[:len(equity)])
+    capital = cash
     ret = (capital - INITIAL_CAPITAL) / INITIAL_CAPITAL
     rets = eq.pct_change().dropna()
-    sharpe = (rets.mean() / rets.std()) * np.sqrt(252) if rets.std() > 0 else 0
+    sharpe = (rets.mean() / rets.std()) * np.sqrt(365) if rets.std() > 0 else 0
     dd = ((eq - eq.cummax()) / eq.cummax()).min()
     wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] <= 0]
@@ -316,7 +344,7 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Krypton TradeBot — Backtest Spot (USDT)")
-    parser.add_argument("--symbol", default="SOLUSDT", choices=["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"])
+    parser.add_argument("--symbol", default="SOLUSDT", choices=["SOLUSDT", "BTCUSDT", "BNBUSDT"])
     parser.add_argument("--start", default="2022-01-01")
     parser.add_argument("--end", default=None)
     args = parser.parse_args()

@@ -9,7 +9,7 @@ Frozen architecture:
 
 This script adds:
 1. Exact trade log export (entry/exit timestamps, symbol, prices, qty, fees, PnL, return, reason).
-2. Exact bootstrap Monte Carlo using realized OOS trade returns, not synthetic returns.
+2. Portfolio block bootstrap using realized OOS daily equity returns.
 3. Multiple frozen pseudo-holdouts. Each holdout chooses TP only from prior data.
 4. SMA sensitivity 180/200/220 as a robustness diagnostic, never as an OOS optimizer.
 """
@@ -24,7 +24,7 @@ import pandas as pd
 import walk_forward as wf
 from config import (
     CIRCUIT_BREAKER_PCT, FEE_RATE, MAX_DRAWDOWN_PCT, MAX_SIMULTANEOUS_POS,
-    RISK_PER_TRADE, STOP_LOSS_ATR_MULT,
+    RISK_PER_TRADE, STOP_LOSS_ATR_MULT, EXIT_SLIPPAGE_PCT,
 )
 
 SYMBOLS = ["SOLUSDT", "BTCUSDT", "BNBUSDT"]
@@ -44,6 +44,7 @@ class Position:
     take_profit: float
     entry_time: pd.Timestamp
     entry_fee: float
+    equity_at_entry: float
 
 
 def _set_sma(data, window: int):
@@ -61,12 +62,15 @@ def _risk_on(data, ts) -> bool:
     return pd.notna(sma) and float(btc["df"].loc[t, "close"]) > float(sma)
 
 
-def _mtm(cash, positions, data, ts):
+def _mtm(cash, positions, data, ts, price_field="close"):
     equity = cash
     for symbol, pos in positions.items():
         df = data[symbol]["df"]
         eligible = df.loc[:ts]
-        px = pos.entry_price if eligible.empty else float(eligible["close"].iloc[-1])
+        if ts in df.index:
+            px = float(df.loc[ts, price_field])
+        else:
+            px = pos.entry_price if eligible.empty else float(eligible["close"].iloc[-1])
         equity += pos.quantity * px
     return equity
 
@@ -79,6 +83,7 @@ def _close_trade(cash, pos, exit_price, exit_time, reason):
     pnl = gross_pnl - pos.entry_fee - exit_fee
     invested = pos.quantity * pos.entry_price + pos.entry_fee
     trade_return = pnl / invested if invested > 0 else 0.0
+    portfolio_return = pnl / pos.equity_at_entry if pos.equity_at_entry > 0 else 0.0
     trade = {
         "symbol": pos.symbol,
         "entry_time": pos.entry_time,
@@ -91,6 +96,7 @@ def _close_trade(cash, pos, exit_price, exit_time, reason):
         "gross_pnl": gross_pnl,
         "pnl": pnl,
         "trade_return": trade_return,
+        "portfolio_return": portfolio_return,
         "reason": reason,
         "holding_days": max((exit_time - pos.entry_time).days, 0),
     }
@@ -119,12 +125,29 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
     halted = False
 
     for ts in calendar:
-        pre_eq = _mtm(cash, positions, data, ts)
+        pre_eq = _mtm(cash, positions, data, ts, price_field="open")
         if day0 != ts.date():
             day0 = ts.date()
             day_start_eq = pre_eq
 
-        # Previous close -> current open entries.
+        # OPEN 1/2: signal exits known since the previous close.
+        for symbol in list(positions):
+            df = data[symbol]["df"]
+            sig = data[symbol]["signals"]
+            if ts not in df.index:
+                continue
+            loc = df.index.get_loc(ts)
+            if isinstance(loc, slice) or loc == 0:
+                continue
+            prev_ts = df.index[loc-1]
+            if prev_ts >= start and int(sig.loc[prev_ts]) != 1:
+                pos = positions[symbol]
+                px = float(df.loc[ts, "open"]) * (1.0 - EXIT_SLIPPAGE_PCT)
+                cash, trade = _close_trade(cash, pos, px, ts, "Sig")
+                trades.append(trade)
+                positions.pop(symbol)
+
+        # OPEN 2/2: previous close -> current open entries.
         for symbol in list(pending):
             if halted or symbol in positions or len(positions) >= MAX_SIMULTANEOUS_POS:
                 pending.pop(symbol, None)
@@ -132,7 +155,7 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
             df = data[symbol]["df"]
             if ts not in df.index:
                 continue
-            eq = _mtm(cash, positions, data, ts)
+            eq = _mtm(cash, positions, data, ts, price_field="open")
             daily_loss = (day_start_eq - eq) / day_start_eq if day_start_eq > 0 else 0
             if daily_loss >= CIRCUIT_BREAKER_PCT:
                 pending.clear()
@@ -152,7 +175,7 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
             if notional + entry_fee > cash:
                 continue
             cash -= notional + entry_fee
-            positions[symbol] = Position(symbol, entry, qty, entry-sl_dist, entry+tp_dist, ts, entry_fee)
+            positions[symbol] = Position(symbol, entry, qty, entry-sl_dist, entry+tp_dist, ts, entry_fee, eq)
 
         # SL/TP against intraday low/high; SL priority.
         for symbol in list(positions):
@@ -161,29 +184,19 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
                 continue
             row = df.loc[ts]
             pos = positions[symbol]
-            hit_sl = float(row["low"]) <= pos.stop_loss
-            hit_tp = float(row["high"]) >= pos.take_profit
-            if hit_sl or hit_tp:
-                reason = "SL" if hit_sl else "TP"
-                px = pos.stop_loss if hit_sl else pos.take_profit
+            open_px = float(row["open"])
+            if open_px <= pos.stop_loss:
+                reason, px = "SL_GAP", open_px * (1.0 - EXIT_SLIPPAGE_PCT)
+            elif open_px >= pos.take_profit:
+                reason, px = "TP_GAP", pos.take_profit
+            elif float(row["low"]) <= pos.stop_loss:
+                reason, px = "SL", pos.stop_loss * (1.0 - EXIT_SLIPPAGE_PCT)
+            elif float(row["high"]) >= pos.take_profit:
+                reason, px = "TP", pos.take_profit
+            else:
+                continue
+            if reason:
                 cash, trade = _close_trade(cash, pos, px, ts, reason)
-                trades.append(trade)
-                positions.pop(symbol)
-
-        # Previous close signal exit -> current open.
-        for symbol in list(positions):
-            df = data[symbol]["df"]
-            sig = data[symbol]["signals"]
-            if ts not in df.index:
-                continue
-            loc = df.index.get_loc(ts)
-            if isinstance(loc, slice) or loc == 0:
-                continue
-            prev_ts = df.index[loc-1]
-            if prev_ts >= start and int(sig.loc[prev_ts]) != 1:
-                pos = positions[symbol]
-                px = float(df.loc[ts, "open"])
-                cash, trade = _close_trade(cash, pos, px, ts, "Sig")
                 trades.append(trade)
                 positions.pop(symbol)
 
@@ -226,7 +239,7 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
             continue
         ts = df.index[-1]
         pos = positions[symbol]
-        px = float(df["close"].iloc[-1])
+        px = float(df["close"].iloc[-1]) * (1.0 - EXIT_SLIPPAGE_PCT)
         cash, trade = _close_trade(cash, pos, px, ts, "EOD")
         trades.append(trade)
         positions.pop(symbol)
@@ -251,6 +264,7 @@ def simulate(data, start, end, tp_mult, sma_window=200, capture_trades=True):
         "profit_factor": pf,
         "halted": halted,
         "trade_log": pd.DataFrame(trades) if capture_trades else pd.DataFrame(),
+        "equity_curve": eqs,
     }
 
 
@@ -263,17 +277,22 @@ def choose_tp(data, development_start, holdout_start, candidates, sma_window=200
     return max(scored, key=lambda x:(x[0],x[1],x[2]))[3]
 
 
-def bootstrap_monte_carlo(trades, runs=10000, seed=42):
-    """Bootstrap realized OOS trade returns with replacement and compute terminal return/DD."""
-    if trades.empty:
+def block_bootstrap_monte_carlo(daily_returns, runs=10000, block_size=10, seed=42):
+    """Circular block bootstrap of realized portfolio returns, preserving short volatility clusters."""
+    r = pd.Series(daily_returns, dtype=float).dropna().to_numpy()
+    if len(r) == 0:
         return {}
-    r = trades["trade_return"].astype(float).to_numpy()
     n = len(r)
     rng = np.random.default_rng(seed)
     finals = np.empty(runs)
     maxdds = np.empty(runs)
     for i in range(runs):
-        sample = rng.choice(r, size=n, replace=True)
+        sample_parts = []
+        while sum(len(x) for x in sample_parts) < n:
+            start = int(rng.integers(0, n))
+            idx = (np.arange(start, start + block_size) % n).astype(int)
+            sample_parts.append(r[idx])
+        sample = np.concatenate(sample_parts)[:n]
         curve = np.cumprod(1.0 + sample)
         full = np.r_[1.0, curve]
         peak = np.maximum.accumulate(full)
@@ -282,6 +301,8 @@ def bootstrap_monte_carlo(trades, runs=10000, seed=42):
         maxdds[i] = dd.min()
     return {
         "runs": runs,
+        "observations": n,
+        "block_size": block_size,
         "median_return": float(np.median(finals)),
         "p05_return": float(np.quantile(finals, .05)),
         "p95_return": float(np.quantile(finals, .95)),
@@ -307,6 +328,7 @@ def main():
 
     holdout_rows = []
     all_trades = []
+    all_daily_returns = []
     sensitivity_rows = []
 
     for htxt in args.holdouts:
@@ -321,6 +343,8 @@ def main():
             "win_rate":m["win_rate"],"profit_factor":m["profit_factor"],"trades":m["trades"],"halted":m["halted"]})
         if not m["trade_log"].empty:
             t = m["trade_log"].copy(); t["holdout_start"] = hstart.date(); all_trades.append(t)
+        if not m["equity_curve"].empty:
+            all_daily_returns.append(m["equity_curve"].pct_change().dropna())
         print(f"Holdout {hstart.date()}->{hend.date()} | TP={tp:.1f} | ret={m['return']:+.2%} | "
               f"Sharpe={m['sharpe']:.2f} | DD={m['max_drawdown']:.2%} | WR={m['win_rate']:.1%} | trades={m['trades']}")
 
@@ -337,7 +361,8 @@ def main():
     trades.to_csv("deep_validation_trades.csv", index=False)
     sensitivity.to_csv("deep_validation_sma_sensitivity.csv", index=False)
 
-    mc = bootstrap_monte_carlo(trades, args.mc_runs)
+    daily_returns = pd.concat(all_daily_returns, ignore_index=True) if all_daily_returns else pd.Series(dtype=float)
+    mc = block_bootstrap_monte_carlo(daily_returns, args.mc_runs)
     pd.DataFrame([mc]).to_csv("deep_validation_monte_carlo.csv", index=False)
 
     print("\nDEEP VALIDATION SUMMARY")
@@ -347,14 +372,14 @@ def main():
     print(holdouts.to_string(index=False))
     compounded = float(np.prod(1+holdouts["return"].to_numpy())-1)
     print(f"\nHoldouts positivos: {(holdouts['return']>0).sum()}/{len(holdouts)}")
-    print(f"Retorno composto dos holdouts: {compounded:+.2%}")
+    print(f"Produto dos holdouts separados (não é retorno contínuo): {compounded:+.2%}")
     print(f"Retorno mediano/holdout: {holdouts['return'].median():+.2%}")
     print(f"Sharpe médio: {holdouts['sharpe'].mean():.3f}")
     print(f"Pior DD: {holdouts['max_drawdown'].min():.2%}")
     print(f"Trades reais agregados: {len(trades)}")
 
     if mc:
-        print("\nEXACT TRADE BOOTSTRAP MONTE CARLO")
+        print("\nPORTFOLIO BLOCK BOOTSTRAP MONTE CARLO")
         print(f"Runs: {mc['runs']}")
         print(f"Retorno mediano: {mc['median_return']:+.2%}")
         print(f"P05/P95 retorno: {mc['p05_return']:+.2%} / {mc['p95_return']:+.2%}")

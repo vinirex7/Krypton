@@ -1,21 +1,27 @@
 # tradebot.py — Krypton Spot TradeBot
-# Live quote asset: U. Backtest quote asset: USDT.
+# Live e backtest usam os mesmos mercados Spot USDT.
 # O mercado live é SPOT; SHORT foi removido. Sinal -1 significa EXIT.
 
 import logging
+import json
 import sqlite3
 import time
 from datetime import datetime, timezone
 
 from binance_client import BinanceInterface
 from config import (
+    ADOPT_ORPHAN_POSITIONS,
     ENTRY_FILL_TIMEOUT_SEC,
+    EXIT_FILL_TIMEOUT_SEC,
+    FEE_RATE,
     LIVE_QUOTE_ASSET,
     LOG_FILE,
     MACD_FAST,
     MACD_SIGNAL,
     MACD_SLOW,
     MAX_SIMULTANEOUS_POS,
+    REGIME_FILTER,
+    REGIME_SMA_PERIOD,
     RSI_HIGH,
     RSI_LOW,
     RSI_PERIOD,
@@ -43,6 +49,7 @@ class TradeBot:
         self.binance = BinanceInterface()
         self.positions = {}
         self.symbol_infos = {}
+        self.protection_blocked = False
         self._init_state_db()
         self._initialize()
 
@@ -62,7 +69,32 @@ class TradeBot:
             )
             """
         )
+        self.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS risk_state (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                state_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         self.db.commit()
+
+    def _save_risk_state(self):
+        self.db.execute(
+            """
+            INSERT INTO risk_state(id, state_json, updated_at) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                state_json=excluded.state_json, updated_at=excluded.updated_at
+            """,
+            (json.dumps(self.risk_manager.snapshot()), datetime.now(timezone.utc).isoformat()),
+        )
+        self.db.commit()
+
+    def _load_risk_state(self):
+        row = self.db.execute("SELECT state_json FROM risk_state WHERE id=1").fetchone()
+        if row:
+            self.risk_manager.restore(json.loads(row[0]))
 
     def _save_position(self, symbol, pos):
         self.db.execute(
@@ -98,6 +130,11 @@ class TradeBot:
         ).fetchall()
         for row in rows:
             symbol, side, entry, qty, sl, tp, order_list_id = row
+            if symbol not in TRADING_PAIRS:
+                raise RuntimeError(
+                    f"Estado legado encontrado para {symbol}. Não migre automaticamente: "
+                    "confira/encerre a posição e remova a linha do SQLite conscientemente."
+                )
             self.positions[symbol] = {
                 "side": side,
                 "entry_price": entry,
@@ -110,10 +147,16 @@ class TradeBot:
     def _initialize(self):
         quote_balance = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
         for symbol in TRADING_PAIRS:
-            self.symbol_infos[symbol] = self.binance.get_symbol_info(symbol)
+            info = self.binance.get_symbol_info(symbol)
+            if info["status"] != "TRADING" or info["quote_asset"] != LIVE_QUOTE_ASSET or not info["is_spot_trading_allowed"]:
+                raise RuntimeError(f"Mercado live inválido para a estratégia: {symbol} | {info}")
+            self.symbol_infos[symbol] = info
         self._load_positions()
-        self._reconcile_positions()
         self.risk_manager = RiskManager(initial_capital=self._get_current_capital())
+        self._load_risk_state()
+        self._reconcile_positions()
+        self.risk_manager.can_trade(self._get_current_capital())
+        self._save_risk_state()
         logger.info(
             "Krypton inicializado | Capital: %.2f %s | Pares: %s | Modo: %s",
             quote_balance, LIVE_QUOTE_ASSET, list(TRADING_PAIRS),
@@ -145,6 +188,7 @@ class TradeBot:
         )
         if not order:
             logger.critical("POSIÇÃO SEM OCO — não abrir novas posições | %s", symbol)
+            self.protection_blocked = True
             return False
         pos["order_list_id"] = order.get("orderListId")
         self._save_position(symbol, pos)
@@ -161,12 +205,11 @@ class TradeBot:
                 continue
 
             pos["quantity"] = base_total
-            open_orders = self.binance.get_open_orders(symbol)
-            if not open_orders:
+            if not self.binance.has_active_oco(symbol, pos.get("order_list_id")):
                 self._protect_position(symbol)
             self._save_position(symbol, pos)
 
-        # Se existe ativo sem estado, proteger em vez de fingir que não existe.
+        # Saldos manuais não pertencem automaticamente ao bot.
         for symbol in TRADING_PAIRS:
             if symbol in self.positions:
                 continue
@@ -174,6 +217,13 @@ class TradeBot:
             price = self.binance.get_current_price(symbol)
             info = self.symbol_infos[symbol]
             if base_total * price < info["min_notional"]:
+                continue
+
+            if not ADOPT_ORPHAN_POSITIONS:
+                logger.critical(
+                    "SALDO ÓRFÃO ignorado | %s | qty %.8f | use conta/subconta exclusiva",
+                    symbol, base_total,
+                )
                 continue
 
             logger.critical("POSIÇÃO ÓRFÃ detectada | %s | qty %.8f", symbol, base_total)
@@ -192,16 +242,27 @@ class TradeBot:
             self._save_position(symbol, self.positions[symbol])
             self._protect_position(symbol)
 
+        self.protection_blocked = any(
+            not self.binance.has_active_oco(symbol, pos.get("order_list_id"))
+            for symbol, pos in self.positions.items()
+        )
+
     def _open_position(self, symbol, atr, signal_price):
-        if symbol in self.positions or len(self.positions) >= MAX_SIMULTANEOUS_POS:
+        if self.protection_blocked or symbol in self.positions or len(self.positions) >= MAX_SIMULTANEOUS_POS:
             return
         capital = self._get_current_capital()
         if not self.risk_manager.can_trade(capital):
             return
 
-        # 1% do capital TOTAL; TRADING_PAIRS allocation não reduz o risco por trade.
+        available_cash = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
         mid = self.binance.get_current_price(symbol)
-        sizing = self.risk_manager.calculate_position_size(capital, mid, atr)
+        sizing = self.risk_manager.calculate_position_size(
+            capital,
+            mid,
+            atr,
+            allocation_pct=TRADING_PAIRS[symbol],
+            available_cash=available_cash / (1.0 + FEE_RATE),
+        )
         if sizing["quantity"] <= 0:
             return
 
@@ -229,6 +290,10 @@ class TradeBot:
             logger.error("Fill sem executedQty | %s | order=%s", symbol, order["orderId"])
             return
         entry_price = quote_qty / executed_qty if quote_qty > 0 else float(filled["price"])
+        # A comissão pode ser debitada no ativo-base; proteja somente o saldo realmente recebido.
+        base_total = self.binance.get_asset_total(self._base_asset(symbol))
+        if base_total > 0:
+            executed_qty = min(executed_qty, base_total)
         sl = entry_price - sizing["sl_distance"]
         tp = entry_price + sizing["tp_distance"]
 
@@ -260,20 +325,19 @@ class TradeBot:
             pos["order_list_id"] = None
             self._save_position(symbol, pos)
 
-        price = self.binance.get_current_price(symbol)
-        order = self.binance.place_limit_order(
+        order = self.binance.place_market_order(
             symbol=symbol,
             side="SELL",
             quantity=pos["quantity"],
-            price=price * 0.9995,
             symbol_info=self.symbol_infos[symbol],
-            reference_price=price,
         )
         if not order:
             self._protect_position(symbol)
             return
 
-        filled = self.binance.wait_for_fill(symbol, order["orderId"])
+        filled = order if order.get("status") == "FILLED" else self.binance.wait_for_fill(
+            symbol, order["orderId"], EXIT_FILL_TIMEOUT_SEC
+        )
         if not filled:
             logger.warning("Saída não executada; restaurando OCO | %s", symbol)
             self._protect_position(symbol)
@@ -287,8 +351,9 @@ class TradeBot:
         for symbol in list(self.positions):
             pos = self.positions[symbol]
             base_total = self.binance.get_asset_total(self._base_asset(symbol))
-            if base_total <= 0:
-                logger.info("OCO executado/posição zerada | %s", symbol)
+            price = self.binance.get_current_price(symbol)
+            if base_total * price < self.symbol_infos[symbol]["min_notional"]:
+                logger.info("OCO executado/posição reduzida a dust | %s", symbol)
                 self._delete_position(symbol)
                 continue
 
@@ -297,8 +362,31 @@ class TradeBot:
                 pos["quantity"] = base_total
                 self._save_position(symbol, pos)
 
-            if not self.binance.get_open_orders(symbol):
+            if not self.binance.has_active_oco(symbol, pos.get("order_list_id")):
                 self._protect_position(symbol)
+
+        self.protection_blocked = any(
+            not self.binance.has_active_oco(symbol, pos.get("order_list_id"))
+            for symbol, pos in self.positions.items()
+        )
+
+    def _risk_on(self) -> bool:
+        if not REGIME_FILTER:
+            return True
+        df = self.binance.get_ohlcv("BTCUSDT", interval=TIMEFRAME, limit=REGIME_SMA_PERIOD + 20, closed_only=True)
+        if len(df) < REGIME_SMA_PERIOD:
+            logger.error("Dados fechados insuficientes para filtro BTC SMA%s", REGIME_SMA_PERIOD)
+            return False
+        sma = float(df["close"].rolling(REGIME_SMA_PERIOD).mean().iloc[-1])
+        close = float(df["close"].iloc[-1])
+        logger.info("Regime BTC | close=%.2f | SMA%s=%.2f | risk_on=%s", close, REGIME_SMA_PERIOD, sma, close > sma)
+        return close > sma
+
+    def _monitor_risk(self):
+        capital = self._get_current_capital()
+        self.risk_manager.can_trade(capital)
+        self._save_risk_state()
+        return capital
 
     def daily_cycle(self):
         now = datetime.now(timezone.utc)
@@ -311,13 +399,18 @@ class TradeBot:
         self._check_orders_and_reconcile()
         current_capital = self._get_current_capital()
 
-        if not self.risk_manager.can_trade(current_capital):
+        if not self.risk_manager.can_trade(current_capital) or self.protection_blocked:
             logger.warning("Trading pausado pelos controles de risco.")
+            self._save_risk_state()
             return
+
+        risk_on = self._risk_on()
 
         for symbol in TRADING_PAIRS:
             try:
-                df = self.binance.get_ohlcv(symbol, interval=TIMEFRAME, limit=300)
+                df = self.binance.get_ohlcv(symbol, interval=TIMEFRAME, limit=300, closed_only=True)
+                if df.empty:
+                    raise RuntimeError("Nenhum candle fechado disponível")
                 signals = compute_signals(
                     df,
                     st_period=SUPERTREND_PERIOD,
@@ -344,7 +437,7 @@ class TradeBot:
                 # Spot: -1 nunca abre short; qualquer sinal diferente de LONG fecha.
                 if symbol in self.positions and signal != 1:
                     self._close_position(symbol, "Signal reversal/flat")
-                elif symbol not in self.positions and signal == 1:
+                elif symbol not in self.positions and signal == 1 and risk_on:
                     self._open_position(symbol, atr, signal_price)
 
             except Exception as exc:
@@ -354,22 +447,29 @@ class TradeBot:
         self.risk_manager.update_peak(final_capital)
         self.risk_manager.check_circuit_breaker(final_capital)
         self.risk_manager.check_max_drawdown(final_capital)
+        self._save_risk_state()
         logger.info("Risco: %s", self.risk_manager.status(final_capital))
 
     def run(self):
         logger.info("Krypton iniciado | Live quote=%s | UTC", LIVE_QUOTE_ASSET)
-        self.daily_cycle()
-        last_daily_run = datetime.now(timezone.utc).date()
+        now = datetime.now(timezone.utc)
+        last_daily_run = None
+        if now.hour == 0 and 5 <= now.minute < 10:
+            self.daily_cycle()
+            last_daily_run = now.date()
+        else:
+            logger.info("Boot fora da janela de execução; nenhuma entrada atrasada será enviada.")
         logger.info("Próximo ciclo diário: 00:05 UTC")
 
         # Não usamos schedule.every().day.at(): schedule 1.2.1 usa timezone local.
         # O relógio é comparado explicitamente em UTC, independentemente do VPS.
         while True:
             now = datetime.now(timezone.utc)
-            if now.hour == 0 and now.minute == 5 and last_daily_run != now.date():
+            if now.hour == 0 and now.minute >= 5 and last_daily_run != now.date():
                 self.daily_cycle()
                 last_daily_run = now.date()
             self._check_orders_and_reconcile()
+            self._monitor_risk()
             time.sleep(30)
 
 

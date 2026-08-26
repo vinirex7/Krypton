@@ -9,17 +9,17 @@ Selection is frozen before the final holdout:
 Tests:
 1) Final untouched holdout (default 2026-01-01 through requested end).
 2) SMA sensitivity at 180/200/220 days. This is diagnostic, not an optimizer.
-3) Monte Carlo bootstrap of holdout trade returns to estimate sequencing/sampling risk.
+3) Circular block bootstrap of exact holdout portfolio returns.
 
 Historical validation uses USDT. This file does not alter live trading configuration.
 """
 import argparse
 from datetime import datetime, timezone
 
-import numpy as np
 import pandas as pd
 
 import walk_forward as wf
+from deep_validation import block_bootstrap_monte_carlo
 
 SYMBOLS = ["SOLUSDT", "BTCUSDT", "BNBUSDT"]
 RISK = 0.01
@@ -58,39 +58,6 @@ def simulate_with_trade_capture(data, start, end, tp, sma_window):
     return m
 
 
-def monte_carlo_from_metrics(total_return, trades, runs=MC_RUNS, seed=42):
-    """Conservative trade-level approximation when simulator exposes aggregate metrics only.
-
-    Samples synthetic per-trade returns whose geometric product matches the observed holdout.
-    Dispersion is anchored to 1% risk/trade. This is a stress test, not a replacement for
-    exact trade-log bootstrap; results are explicitly labelled approximate.
-    """
-    if trades <= 0:
-        return {"mc_median_return": 0.0, "mc_p05_return": 0.0, "mc_p95_return": 0.0,
-                "mc_median_max_dd": 0.0, "mc_p95_max_dd": 0.0, "mc_loss_probability": 0.0}
-    rng = np.random.default_rng(seed)
-    target_log = np.log1p(total_return) / trades
-    sigma = RISK
-    finals, dds = [], []
-    for _ in range(runs):
-        r = rng.normal(target_log, sigma, trades)
-        eq = np.exp(np.cumsum(r))
-        peak = np.maximum.accumulate(np.r_[1.0, eq])
-        curve = np.r_[1.0, eq]
-        dd = np.min(curve / peak - 1.0)
-        finals.append(eq[-1] - 1.0)
-        dds.append(dd)
-    finals = np.asarray(finals); dds = np.asarray(dds)
-    return {
-        "mc_median_return": float(np.median(finals)),
-        "mc_p05_return": float(np.quantile(finals, .05)),
-        "mc_p95_return": float(np.quantile(finals, .95)),
-        "mc_median_max_dd": float(np.median(dds)),
-        "mc_p95_max_dd": float(np.quantile(dds, .05)),
-        "mc_loss_probability": float(np.mean(finals < 0)),
-    }
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--start", default="2022-01-01")
@@ -114,9 +81,15 @@ def main():
     print(f"Holdout intocado: {holdout.date()} -> {pd.Timestamp(end).date()}\n")
 
     rows = []
+    canonical_metrics = None
     for window in SMA_WINDOWS:
         m = simulate_with_trade_capture(data, holdout, end, selected_tp, window)
-        rows.append({"sma": window, "selected_tp": selected_tp, **m})
+        rows.append({
+            "sma": window, "selected_tp": selected_tp,
+            **{k: v for k, v in m.items() if k not in {"trade_log", "equity_curve"}},
+        })
+        if window == 200:
+            canonical_metrics = m
         print(f"SMA{window}: return={m['return']:+.2%} | Sharpe={m['sharpe']:.3f} | "
               f"DD={m['max_drawdown']:.2%} | WR={m['win_rate']:.1%} | "
               f"PF={m['profit_factor']:.3f} | trades={m['trades']} | halted={m['halted']}")
@@ -125,7 +98,8 @@ def main():
     sensitivity.to_csv("final_holdout_sma_sensitivity.csv", index=False)
 
     canonical = sensitivity.loc[sensitivity["sma"] == 200].iloc[0]
-    mc = monte_carlo_from_metrics(float(canonical["return"]), int(canonical["trades"]), args.mc_runs)
+    daily_returns = canonical_metrics["equity_curve"].pct_change().dropna()
+    mc = block_bootstrap_monte_carlo(daily_returns, args.mc_runs)
     pd.DataFrame([mc]).to_csv("final_holdout_monte_carlo.csv", index=False)
 
     print("\nFINAL HOLDOUT — SMA200")
@@ -136,15 +110,13 @@ def main():
     print(f"Profit factor: {canonical['profit_factor']:.3f}")
     print(f"Trades: {int(canonical['trades'])}")
 
-    print("\nMONTE CARLO APROXIMADO — stress de sequência/amostragem")
+    print("\nPORTFOLIO BLOCK BOOTSTRAP — retornos diários reais do holdout")
     print(f"Runs: {args.mc_runs}")
-    print(f"Retorno mediano: {mc['mc_median_return']:+.2%}")
-    print(f"Retorno P05/P95: {mc['mc_p05_return']:+.2%} / {mc['mc_p95_return']:+.2%}")
-    print(f"DD mediano: {mc['mc_median_max_dd']:.2%}")
-    print(f"DD P95 adverso: {mc['mc_p95_max_dd']:.2%}")
-    print(f"Probabilidade de retorno negativo: {mc['mc_loss_probability']:.1%}")
-    print("\nNOTA: Monte Carlo é aproximado porque o simulador atual não exporta o log completo de trades. "
-          "A decisão principal deve se apoiar no holdout real e na estabilidade SMA180/200/220.")
+    print(f"Retorno mediano: {mc['median_return']:+.2%}")
+    print(f"Retorno P05/P95: {mc['p05_return']:+.2%} / {mc['p95_return']:+.2%}")
+    print(f"DD mediano: {mc['median_max_dd']:.2%}")
+    print(f"DD P95 adverso: {mc['p95_adverse_dd']:.2%}")
+    print(f"Probabilidade de retorno negativo: {mc['loss_probability']:.1%}")
     print("Arquivos: final_holdout_sma_sensitivity.csv, final_holdout_monte_carlo.csv")
 
 if __name__ == "__main__":

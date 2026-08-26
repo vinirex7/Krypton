@@ -4,14 +4,8 @@ The goal is NOT to grid-search the whole history. Every variant uses the same ro
 walk-forward folds; TP is optimized only inside each training window and then frozen
 for the following OOS window.
 
-Variants tested:
-- baseline: original 4 assets, 1% risk
-- no_eth: remove ETH, renormalize remaining weights
-- risk_0_5: original assets, 0.5% risk
-- no_eth_risk_0_5
-- regime: original assets, 1% risk, BTC>SMA200 entry filter
-- no_eth_regime
-- conservative: no ETH, 0.5% risk, BTC>SMA200 filter
+All variants keep the frozen SOL/BTC/BNB universe. Diagnostics vary only risk and
+the BTC>SMA200 gate, so an excluded ETH market cannot leak back into production research.
 
 Outputs:
 - robustness_folds.csv: every OOS fold for every variant
@@ -28,45 +22,27 @@ import walk_forward as wf
 
 VARIANTS = [
     {
-        "name": "baseline",
-        "symbols": ["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"],
+        "name": "frozen_baseline",
+        "symbols": ["SOLUSDT", "BTCUSDT", "BNBUSDT"],
         "risk": 0.010,
-        "regime_filter": False,
+        "regime_filter": True,
     },
     {
-        "name": "no_eth",
+        "name": "no_regime_diagnostic",
         "symbols": ["SOLUSDT", "BTCUSDT", "BNBUSDT"],
         "risk": 0.010,
         "regime_filter": False,
     },
     {
         "name": "risk_0_5",
-        "symbols": ["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"],
-        "risk": 0.005,
-        "regime_filter": False,
-    },
-    {
-        "name": "no_eth_risk_0_5",
         "symbols": ["SOLUSDT", "BTCUSDT", "BNBUSDT"],
         "risk": 0.005,
-        "regime_filter": False,
-    },
-    {
-        "name": "regime",
-        "symbols": ["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"],
-        "risk": 0.010,
         "regime_filter": True,
     },
     {
-        "name": "no_eth_regime",
+        "name": "risk_1_5_stress",
         "symbols": ["SOLUSDT", "BTCUSDT", "BNBUSDT"],
-        "risk": 0.010,
-        "regime_filter": True,
-    },
-    {
-        "name": "conservative",
-        "symbols": ["SOLUSDT", "BTCUSDT", "BNBUSDT"],
-        "risk": 0.005,
+        "risk": 0.015,
         "regime_filter": True,
     },
 ]
@@ -86,7 +62,7 @@ def main():
     end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     # Download the union of assets once. BTC is also used by the regime filter.
-    all_symbols = ["SOLUSDT", "BTCUSDT", "ETHUSDT", "BNBUSDT"]
+    all_symbols = ["SOLUSDT", "BTCUSDT", "BNBUSDT"]
     data = wf._prepare_data(all_symbols, start, end)
 
     fold_frames = []

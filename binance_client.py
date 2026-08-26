@@ -3,6 +3,7 @@
 import logging
 import math
 import time
+from datetime import datetime, timezone
 
 import pandas as pd
 from binance.client import Client
@@ -27,7 +28,7 @@ class BinanceInterface:
         self.client.ping()
         logger.info("Binance API conectada | Modo: %s", "TESTNET" if USE_TESTNET else "PRODUÇÃO")
 
-    def get_ohlcv(self, symbol: str, interval: str = "1d", limit: int = 300) -> pd.DataFrame:
+    def get_ohlcv(self, symbol: str, interval: str = "1d", limit: int = 300, closed_only: bool = True) -> pd.DataFrame:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 klines = self.client.get_klines(symbol=symbol, interval=interval, limit=limit)
@@ -39,10 +40,14 @@ class BinanceInterface:
                     ],
                 )
                 df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+                df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
                 df.set_index("open_time", inplace=True)
                 for col in ["open", "high", "low", "close", "volume"]:
                     df[col] = df[col].astype(float)
-                return df[["open", "high", "low", "close", "volume"]]
+                if closed_only:
+                    now = pd.Timestamp(datetime.now(timezone.utc))
+                    df = df.loc[df["close_time"] <= now]
+                return df[["open", "high", "low", "close", "volume", "close_time"]]
             except BinanceAPIException as exc:
                 logger.warning("get_ohlcv tentativa %s/%s: %s", attempt, MAX_RETRIES, exc)
                 if attempt < MAX_RETRIES:
@@ -56,7 +61,7 @@ class BinanceInterface:
         filters = {f["filterType"]: f for f in info["filters"]}
         lot = filters.get("LOT_SIZE")
         price_filter = filters.get("PRICE_FILTER")
-        # Binance usa MIN_NOTIONAL em alguns pares e NOTIONAL em outros (ex.: SOLU).
+        # Binance usa MIN_NOTIONAL em alguns pares e NOTIONAL em outros.
         notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
         if not lot or not price_filter or not notional_filter:
             raise RuntimeError(f"Filtros incompletos para {symbol}")
@@ -64,9 +69,12 @@ class BinanceInterface:
             "step_size": float(lot["stepSize"]),
             "tick_size": float(price_filter["tickSize"]),
             "min_notional": float(notional_filter["minNotional"]),
+            "status": info.get("status"),
+            "quote_asset": info.get("quoteAsset"),
+            "is_spot_trading_allowed": bool(info.get("isSpotTradingAllowed", False)),
         }
 
-    def get_account_balance(self, asset: str = "U") -> float:
+    def get_account_balance(self, asset: str = "USDT") -> float:
         balances = self.client.get_account()["balances"]
         for balance in balances:
             if balance["asset"] == asset:
@@ -179,12 +187,31 @@ class BinanceInterface:
     def get_open_orders(self, symbol: str) -> list:
         return self.client.get_open_orders(symbol=symbol)
 
+    def has_active_oco(self, symbol: str, order_list_id: int | None) -> bool:
+        if order_list_id is None:
+            return False
+        return any(int(o.get("orderListId", -1)) == int(order_list_id) for o in self.get_open_orders(symbol))
+
+    def place_market_order(self, symbol: str, side: str, quantity: float, symbol_info: dict) -> dict | None:
+        qty = self._round_step(quantity, symbol_info["step_size"])
+        if qty <= 0:
+            return None
+        try:
+            return self.client.create_order(
+                symbol=symbol,
+                side=side.upper(),
+                type=Client.ORDER_TYPE_MARKET,
+                quantity=qty,
+            )
+        except BinanceAPIException as exc:
+            logger.error("Erro ao enviar MARKET %s %s: %s", side, symbol, exc)
+            return None
+
     def create_oco_order(self, symbol: str, quantity: float, take_profit_price: float, stop_price: float, symbol_info: dict) -> dict | None:
         """Cria OCO SELL real para proteger uma posição LONG spot."""
         qty = self._round_step(quantity, symbol_info["step_size"])
         tp = self._round_tick(take_profit_price, symbol_info["tick_size"])
         stop = self._round_tick(stop_price, symbol_info["tick_size"])
-        stop_limit = self._round_tick(stop * (1.0 - min(SLIPPAGE_LIMIT_PCT / 2.0, 0.0025)), symbol_info["tick_size"])
         try:
             order = self.client.create_oco_order(
                 symbol=symbol,
@@ -192,8 +219,6 @@ class BinanceInterface:
                 quantity=qty,
                 price=f"{tp:.8f}",
                 stopPrice=f"{stop:.8f}",
-                stopLimitPrice=f"{stop_limit:.8f}",
-                stopLimitTimeInForce=Client.TIME_IN_FORCE_GTC,
             )
             logger.info("OCO criada | %s | qty %.8f | TP %.8f | SL %.8f", symbol, qty, tp, stop)
             return order
