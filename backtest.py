@@ -348,4 +348,5 @@ if __name__ == "__main__":
     parser.add_argument("--start", default="2022-01-01")
     parser.add_argument("--end", default=None)
     args = parser.parse_args()
-    run_backtest(args.symbol, args.start, args.end)
+    if not run_backtest(args.symbol, args.start, args.end):
+        raise SystemExit(2)

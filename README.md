@@ -70,6 +70,8 @@ python walk_forward.py --start 2022-01-01
 python deep_validation.py --start 2022-01-01
 ```
 
+Por integridade, falta de acesso ao mercado Binance USDT encerra a pesquisa com erro; o sistema não troca silenciosamente para USD/Yahoo. No GitHub Actions, os testes determinísticos rodam a cada push e a pesquisa de mercado é iniciada manualmente (`workflow_dispatch`) em um ambiente com acesso à Binance.
+
 ### Live/testnet
 
 ```bash
