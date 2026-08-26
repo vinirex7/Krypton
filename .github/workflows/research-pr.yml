@@ -7,6 +7,8 @@ on:
       - 'regime_diagnostics.py'
       - 'forensic_diagnostics.py'
       - 'forensic_ci.py'
+      - 'cross_asset_diagnostics.py'
+      - 'cross_asset_ci.py'
       - 'selection_pipeline.py'
       - 'execution_audit.py'
       - 'config_search.py'
@@ -29,11 +31,11 @@ jobs:
           python -m py_compile
           execution_audit.py research_metrics.py research_validation.py
           selection_pipeline.py regime_diagnostics.py forensic_diagnostics.py
-          forensic_ci.py config_search.py
+          forensic_ci.py cross_asset_diagnostics.py cross_asset_ci.py config_search.py
       - name: Run deterministic tests
         run: python -m unittest discover -s tests -v
 
-  forensic:
+  cross_asset:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,17 +45,13 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run bull capture and 2025 H1 forensic diagnostics
-        run: python forensic_ci.py --start 2020-08-01 --end 2026-06-30
-      - name: Upload forensic results
+      - name: Run cross-asset opportunity diagnostics
+        run: python cross_asset_ci.py --start 2020-08-01 --end 2026-06-30
+      - name: Upload cross-asset results
         uses: actions/upload-artifact@v4
         with:
-          name: krypton-forensic-results
+          name: krypton-cross-asset-results
           path: |
-            forensic_period_summary.csv
-            forensic_trades.csv
-            forensic_daily.csv
-            forensic_2025h1_trades.csv
-            forensic_2025h1_daily.csv
-            forensic_report.json
+            cross_asset_periods.csv
+            cross_asset_comparison.json
           if-no-files-found: error
