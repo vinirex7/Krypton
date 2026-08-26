@@ -1,0 +1,52 @@
+name: Krypton Cross-Asset Shadow Validation
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_shadow.py'
+      - 'tests/test_cross_asset_shadow.py'
+      - '.github/workflows/cross-asset-shadow.yml'
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: 'Optional UTC timestamp for deterministic shadow replay'
+        required: false
+        type: string
+
+jobs:
+  validate_shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile shadow module
+        run: python -m py_compile cross_asset_shadow.py
+      - name: Run deterministic shadow tests
+        run: python -m unittest tests.test_cross_asset_shadow -v
+      - name: Prove pre-start mode is read-only
+        run: >-
+          python cross_asset_shadow.py
+          --as-of 2026-08-27T00:01:00Z
+          --paper-start 2026-08-27
+          --output cross_asset_shadow_ci.jsonl
+      - name: Verify no order capability is exposed
+        run: |
+          python - <<'PY'
+          import cross_asset_shadow as s
+          assert not hasattr(s, 'Client')
+          assert not hasattr(s, 'create_order')
+          assert not hasattr(s, 'order_market_buy')
+          assert not hasattr(s, 'order_market_sell')
+          print('read-only surface verified')
+          PY
+      - name: Upload shadow proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-shadow-proof
+          path: cross_asset_shadow_ci.jsonl
+          if-no-files-found: error
