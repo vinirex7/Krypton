@@ -21,6 +21,7 @@ on:
       - '.github/workflows/research-pr.yml'
   workflow_dispatch:
 
+# Isolated core-v2 validation trigger. Research only; live behavior is unchanged.
 jobs:
   validate:
     runs-on: ubuntu-latest
