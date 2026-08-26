@@ -9,6 +9,8 @@ on:
       - 'forensic_ci.py'
       - 'cross_asset_diagnostics.py'
       - 'cross_asset_ci.py'
+      - 'entry_state_diagnostics.py'
+      - 'entry_state_ci.py'
       - 'selection_pipeline.py'
       - 'execution_audit.py'
       - 'config_search.py'
@@ -30,12 +32,13 @@ jobs:
         run: >-
           python -m py_compile
           execution_audit.py research_metrics.py research_validation.py
-          selection_pipeline.py regime_diagnostics.py forensic_diagnostics.py
-          forensic_ci.py cross_asset_diagnostics.py cross_asset_ci.py config_search.py
+          selection_pipeline.py regime_diagnostics.py forensic_diagnostics.py forensic_ci.py
+          cross_asset_diagnostics.py cross_asset_ci.py
+          entry_state_diagnostics.py entry_state_ci.py config_search.py
       - name: Run deterministic tests
         run: python -m unittest discover -s tests -v
 
-  cross_asset:
+  entry_state:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,13 +48,19 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run cross-asset opportunity diagnostics
-        run: python cross_asset_ci.py --start 2020-08-01 --end 2026-06-30
-      - name: Upload cross-asset results
+      - name: Run entry-state forensic diagnostics
+        run: python entry_state_ci.py --start 2020-08-01 --end 2026-06-30
+      - name: Upload entry-state results
         uses: actions/upload-artifact@v4
         with:
-          name: krypton-cross-asset-results
+          name: krypton-entry-state-results
           path: |
-            cross_asset_periods.csv
-            cross_asset_comparison.json
+            entry_state_trades.csv
+            entry_state_feature_summary.csv
+            entry_state_groups.csv
+            entry_state_stop_comparison.csv
+            entry_state_tp_sl_summary.csv
+            entry_state_focus_monthly.csv
+            entry_state_period_summary.csv
+            entry_state_report.json
           if-no-files-found: error
