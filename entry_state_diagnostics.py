@@ -64,6 +64,27 @@ def _crossings(close: pd.Series, sma: pd.Series, loc: int, bars: int) -> float:
     return float((above.diff().abs() == 1).sum())
 
 
+def _drawdown_from_high(close: pd.Series, loc: int, bars: int) -> float:
+    start = max(0, loc - bars + 1)
+    window = close.iloc[start : loc + 1].dropna().astype(float)
+    if window.empty:
+        return np.nan
+    high = float(window.max())
+    return float(window.iloc[-1] / high - 1.0) if high > 0 else np.nan
+
+
+def _long_signal_age(signals: pd.Series, loc: int) -> float:
+    aligned = signals.iloc[: loc + 1]
+    if aligned.empty or int(aligned.iloc[-1]) != 1:
+        return 0.0
+    age = 0
+    for value in reversed(aligned.tolist()):
+        if int(value) != 1:
+            break
+        age += 1
+    return float(age)
+
+
 def _state_for_asset(data, symbol: str, ts) -> dict:
     item = data[symbol]
     df = item["df"]
@@ -77,6 +98,7 @@ def _state_for_asset(data, symbol: str, ts) -> dict:
     sma_val = float(sma.iloc[loc]) if pd.notna(sma.iloc[loc]) else np.nan
     atr = item["atr"].reindex(df.index)
     atr_val = float(atr.iloc[loc]) if pd.notna(atr.iloc[loc]) else np.nan
+    signals = item["signals"].reindex(df.index)
     return {
         "signal_time": signal_ts,
         "close": px,
@@ -92,6 +114,9 @@ def _state_for_asset(data, symbol: str, ts) -> dict:
         "realized_vol60": _window_vol(close, loc, 60),
         "sma_crossings30": _crossings(close, sma, loc, 30),
         "sma_crossings60": _crossings(close, sma, loc, 60),
+        "drawdown_from_high20": _drawdown_from_high(close, loc, 20),
+        "drawdown_from_high60": _drawdown_from_high(close, loc, 60),
+        "long_signal_age": _long_signal_age(signals, loc),
         "atr_pct": atr_val / px if np.isfinite(atr_val) and px > 0 else np.nan,
     }
 
@@ -122,18 +147,81 @@ def entry_features(data, symbols, symbol, entry_time) -> dict:
         vals = [v.get(f"mom{lookback}", np.nan) for v in states.values()]
         valid = [x for x in vals if np.isfinite(x)]
         out[f"momentum{lookback}_breadth"] = float(np.mean([x > 0 for x in valid])) if valid else np.nan
+    if np.isfinite(out["momentum30_breadth"]) and np.isfinite(out["momentum90_breadth"]):
+        out["momentum30_minus_90_breadth"] = out["momentum30_breadth"] - out["momentum90_breadth"]
+    else:
+        out["momentum30_minus_90_breadth"] = np.nan
 
     for prefix, state in (("asset", asset), ("btc", btc)):
         for key in (
             "above_sma200", "sma200_distance", "mom20", "mom30", "mom60", "mom90",
             "trend_eff30", "trend_eff60", "realized_vol30", "realized_vol60",
-            "sma_crossings30", "sma_crossings60", "atr_pct",
+            "sma_crossings30", "sma_crossings60", "drawdown_from_high20",
+            "drawdown_from_high60", "long_signal_age", "atr_pct",
         ):
             out[f"{prefix}_{key}"] = state.get(key, np.nan)
     if np.isfinite(out.get("asset_mom60", np.nan)) and np.isfinite(out.get("btc_mom60", np.nan)):
         out["asset_relative_mom60"] = out["asset_mom60"] - out["btc_mom60"]
     else:
         out["asset_relative_mom60"] = np.nan
+    for prefix in ("asset", "btc"):
+        mom20 = out.get(f"{prefix}_mom20", np.nan)
+        mom90 = out.get(f"{prefix}_mom90", np.nan)
+        out[f"{prefix}_mom20_minus_mom90"] = (
+            mom20 - mom90 if np.isfinite(mom20) and np.isfinite(mom90) else np.nan
+        )
+    return out
+
+
+def add_trade_history_features(trades: pd.DataFrame) -> pd.DataFrame:
+    """Attach only same-symbol trade history known by each signal close."""
+    if trades.empty:
+        return trades.copy()
+    out = trades.copy()
+    out["entry_time"] = pd.to_datetime(out["entry_time"], utc=True)
+    out["exit_time"] = pd.to_datetime(out["exit_time"], utc=True)
+    out["signal_time"] = pd.to_datetime(out["signal_time"], utc=True)
+    feature_rows = {}
+    for _, group in out.sort_values(["symbol", "entry_time", "exit_time"]).groupby("symbol", sort=False):
+        history = []
+        for idx, trade in group.iterrows():
+            signal_time = trade["signal_time"]
+            known = [h for h in history if h["exit_time"] <= signal_time]
+            prior = known[-1] if known else None
+            prior_stops = [h for h in known if str(h["reason"]).startswith("SL")]
+            consecutive_stops = 0
+            for event in reversed(known):
+                if str(event["reason"]).startswith("SL"):
+                    consecutive_stops += 1
+                else:
+                    break
+            days_since_exit = (
+                float((signal_time - prior["exit_time"]).days) if prior is not None else np.nan
+            )
+            days_since_stop = (
+                float((signal_time - prior_stops[-1]["exit_time"]).days) if prior_stops else np.nan
+            )
+            feature_rows[idx] = {
+                "prior_exit_was_stop": float(str(prior["reason"]).startswith("SL")) if prior else 0.0,
+                "days_since_prior_exit": days_since_exit,
+                "days_since_prior_stop": days_since_stop,
+                "immediate_reentry_after_stop": float(
+                    prior is not None
+                    and str(prior["reason"]).startswith("SL")
+                    and days_since_exit == 0.0
+                ),
+                "stops_last_30d": float(sum(
+                    h["exit_time"] >= signal_time - pd.Timedelta(days=30) for h in prior_stops
+                )),
+                "stops_last_60d": float(sum(
+                    h["exit_time"] >= signal_time - pd.Timedelta(days=60) for h in prior_stops
+                )),
+                "consecutive_prior_stops": float(consecutive_stops),
+            }
+            history.append({"exit_time": trade["exit_time"], "reason": trade["reason"]})
+    history_features = pd.DataFrame.from_dict(feature_rows, orient="index")
+    for column in history_features:
+        out[column] = history_features[column].reindex(out.index)
     return out
 
 
@@ -149,6 +237,13 @@ def build_trade_frame(data, symbols, start, end, window_days=180):
             features = entry_features(data, symbols, str(trade["symbol"]), trade["entry_time"])
             actual_risk = float(trade.get("actual_risk", np.nan))
             pnl = float(trade["pnl"])
+            reason = str(trade["reason"])
+            if reason.startswith("TP"):
+                exit_class = "TP"
+            elif reason.startswith("SL"):
+                exit_class = "SL"
+            else:
+                exit_class = "OTHER"
             row = {
                 "period": period,
                 "period_start": ps.date().isoformat(),
@@ -157,7 +252,8 @@ def build_trade_frame(data, symbols, start, end, window_days=180):
                 "symbol": trade["symbol"],
                 "entry_time": trade["entry_time"],
                 "exit_time": trade["exit_time"],
-                "reason": trade["reason"],
+                "reason": reason,
+                "exit_class": exit_class,
                 "pnl": pnl,
                 "R": pnl / actual_risk if np.isfinite(actual_risk) and actual_risk > 0 else np.nan,
                 "winner": int(pnl > 0),
@@ -170,19 +266,25 @@ def build_trade_frame(data, symbols, start, end, window_days=180):
                 **features,
             }
             rows.append(row)
-    return pd.DataFrame(rows)
+    return add_trade_history_features(pd.DataFrame(rows))
 
 
 FEATURES = [
     "cross_asset_sma_breadth", "cross_asset_confirm_2of3", "btc_on_weak_breadth",
     "momentum30_breadth", "momentum60_breadth", "momentum90_breadth",
     "btc_sma200_distance", "btc_mom20", "btc_mom60", "btc_mom90",
+    "btc_mom20_minus_mom90", "momentum30_minus_90_breadth",
     "btc_trend_eff30", "btc_trend_eff60", "btc_realized_vol30", "btc_realized_vol60",
-    "btc_sma_crossings30", "btc_sma_crossings60",
+    "btc_sma_crossings30", "btc_sma_crossings60", "btc_drawdown_from_high20",
+    "btc_drawdown_from_high60", "btc_long_signal_age",
     "asset_above_sma200", "asset_sma200_distance", "asset_mom20", "asset_mom60", "asset_mom90",
-    "asset_relative_mom60", "asset_trend_eff30", "asset_trend_eff60",
+    "asset_mom20_minus_mom90", "asset_relative_mom60", "asset_trend_eff30", "asset_trend_eff60",
     "asset_realized_vol30", "asset_realized_vol60", "asset_sma_crossings30",
-    "asset_sma_crossings60", "asset_atr_pct", "entry_weight",
+    "asset_sma_crossings60", "asset_drawdown_from_high20", "asset_drawdown_from_high60",
+    "asset_long_signal_age", "asset_atr_pct", "entry_weight",
+    "prior_exit_was_stop", "days_since_prior_exit", "days_since_prior_stop",
+    "immediate_reentry_after_stop", "stops_last_30d", "stops_last_60d",
+    "consecutive_prior_stops",
 ]
 
 
@@ -198,7 +300,14 @@ def _feature_comparison(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
         loss = vals[frame["winner"] == 0].dropna()
         r = pd.to_numeric(frame["R"], errors="coerce")
         corr_frame = pd.DataFrame({"x": vals, "R": r}).dropna()
-        spearman = float(corr_frame["x"].corr(corr_frame["R"], method="spearman")) if len(corr_frame) >= 3 else np.nan
+        # pandas delegates method="spearman" to scipy, which is intentionally
+        # not a Krypton runtime dependency. Pearson correlation of average
+        # ranks is the same Spearman coefficient and keeps this diagnostic
+        # runnable in the project's pinned CI environment.
+        spearman = (
+            float(corr_frame["x"].rank().corr(corr_frame["R"].rank()))
+            if len(corr_frame) >= 3 else np.nan
+        )
         rows.append({
             "scope": scope,
             "feature": feature,
@@ -211,9 +320,90 @@ def _feature_comparison(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def tp_sl_comparison(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
+    """Compare only fixed-barrier outcomes; signal/EOD exits stay separate."""
+    if frame.empty or "exit_class" not in frame:
+        return pd.DataFrame()
+    core = frame[frame["exit_class"].isin(["TP", "SL"])]
+    rows = []
+    for feature in FEATURES:
+        if feature not in core:
+            continue
+        vals = pd.to_numeric(core[feature], errors="coerce")
+        tp = vals[core["exit_class"] == "TP"].dropna()
+        sl = vals[core["exit_class"] == "SL"].dropna()
+        rows.append({
+            "scope": scope,
+            "feature": feature,
+            "tp_n": int(len(tp)),
+            "sl_n": int(len(sl)),
+            "tp_median": float(tp.median()) if len(tp) else np.nan,
+            "sl_median": float(sl.median()) if len(sl) else np.nan,
+            "tp_minus_sl": float(tp.median() - sl.median()) if len(tp) and len(sl) else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
+def focus_monthly_outcomes(trades: pd.DataFrame) -> pd.DataFrame:
+    focus = trades[trades["focus_2025_h1"] == 1].copy()
+    if focus.empty:
+        return pd.DataFrame()
+    focus["month"] = pd.to_datetime(focus["entry_time"], utc=True).dt.strftime("%Y-%m")
+    rows = []
+    for month, group in focus.groupby("month", sort=True):
+        rows.append({
+            "month": month,
+            "trades": int(len(group)),
+            "wins": int(group["winner"].sum()),
+            "stops": int((group["exit_class"] == "SL").sum()),
+            "take_profits": int((group["exit_class"] == "TP").sum()),
+            "other_exits": int((group["exit_class"] == "OTHER").sum()),
+            "total_R": float(group["R"].sum()),
+            "pnl": float(group["pnl"].sum()),
+            "weak_breadth_entries": int((group["btc_on_weak_breadth"] == 1).sum()),
+            "median_momentum30_breadth": float(group["momentum30_breadth"].median()),
+            "median_momentum60_breadth": float(group["momentum60_breadth"].median()),
+        })
+    return pd.DataFrame(rows)
+
+
+def period_outcomes(trades: pd.DataFrame) -> pd.DataFrame:
+    """Show whether an apparent entry-state separator is stable across cycles."""
+    if trades.empty:
+        return pd.DataFrame()
+    rows = []
+    for (period, start, end), group in trades.groupby(
+        ["period", "period_start", "period_end"], sort=True
+    ):
+        rows.append({
+            "period": int(period),
+            "period_start": start,
+            "period_end": end,
+            "trades": int(len(group)),
+            "win_rate": float(group["winner"].mean()),
+            "stops": int(group["is_stop"].sum()),
+            "total_R": float(group["R"].sum()),
+            "pnl": float(group["pnl"].sum()),
+            "median_asset_long_signal_age": float(group["asset_long_signal_age"].median()),
+            "median_btc_long_signal_age": float(group["btc_long_signal_age"].median()),
+            "median_momentum30_breadth": float(group["momentum30_breadth"].median()),
+            "median_momentum60_breadth": float(group["momentum60_breadth"].median()),
+            "median_momentum90_breadth": float(group["momentum90_breadth"].median()),
+            "median_asset_mom60": float(group["asset_mom60"].median()),
+            "median_btc_mom60": float(group["btc_mom60"].median()),
+            "weak_breadth_entries": int((group["btc_on_weak_breadth"] == 1).sum()),
+            "immediate_reentries_after_stop": int((group["immediate_reentry_after_stop"] == 1).sum()),
+        })
+    return pd.DataFrame(rows)
+
+
 def _group_outcomes(trades: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for feature in ("btc_on_weak_breadth", "cross_asset_confirm_2of3", "asset_above_sma200"):
+    grouped_features = (
+        "btc_on_weak_breadth", "cross_asset_confirm_2of3", "asset_above_sma200",
+        "immediate_reentry_after_stop", "prior_exit_was_stop",
+    )
+    for feature in grouped_features:
         if feature not in trades:
             continue
         for value, g in trades.dropna(subset=[feature]).groupby(feature):
@@ -228,7 +418,7 @@ def _group_outcomes(trades: pd.DataFrame) -> pd.DataFrame:
                 "total_R": float(g["R"].sum()),
             })
     focus = trades[trades["focus_2025_h1"] == 1]
-    for feature in ("btc_on_weak_breadth", "cross_asset_confirm_2of3", "asset_above_sma200"):
+    for feature in grouped_features:
         if feature not in focus:
             continue
         for value, g in focus.dropna(subset=[feature]).groupby(feature):
@@ -286,15 +476,28 @@ def main():
     feature_summary = pd.concat(comparisons, ignore_index=True)
     groups = _group_outcomes(trades)
     stops = stop_comparison(trades)
+    tp_sl = pd.concat([
+        tp_sl_comparison(trades, "all"),
+        tp_sl_comparison(trades[trades["focus_2025_h1"] == 1], "2025_h1"),
+        tp_sl_comparison(trades[trades["focus_2025_h1"] == 0], "outside_2025_h1"),
+    ], ignore_index=True)
+    monthly = focus_monthly_outcomes(trades)
+    periods = period_outcomes(trades)
 
     trades.to_csv("entry_state_trades.csv", index=False)
     feature_summary.to_csv("entry_state_feature_summary.csv", index=False)
     groups.to_csv("entry_state_groups.csv", index=False)
     stops.to_csv("entry_state_stop_comparison.csv", index=False)
+    tp_sl.to_csv("entry_state_tp_sl_summary.csv", index=False)
+    monthly.to_csv("entry_state_focus_monthly.csv", index=False)
+    periods.to_csv("entry_state_period_summary.csv", index=False)
 
     focus = trades[trades["focus_2025_h1"] == 1]
     report = {
         "trades_total": int(len(trades)),
+        "signal_not_before_entry_violations": int(
+            (pd.to_datetime(trades["signal_time"], utc=True) >= pd.to_datetime(trades["entry_time"], utc=True)).sum()
+        ),
         "focus_2025_h1": {
             "trades": int(len(focus)),
             "win_rate": float(focus["winner"].mean()) if len(focus) else None,
@@ -312,13 +515,24 @@ def main():
     if not stops.empty:
         shown = stops.assign(abs_diff=stops["h1_minus_other_stop"].abs()).sort_values("abs_diff", ascending=False).head(15)
         print(shown.drop(columns="abs_diff").to_string(index=False))
+    print("\n2025 H1 TP VS SL ENTRY-STATE DIFFERENCES")
+    focus_tp_sl = tp_sl[tp_sl["scope"] == "2025_h1"]
+    if not focus_tp_sl.empty:
+        shown = focus_tp_sl.assign(abs_diff=focus_tp_sl["tp_minus_sl"].abs()).sort_values("abs_diff", ascending=False).head(15)
+        print(shown.drop(columns="abs_diff").to_string(index=False))
+    print("\n2025 H1 MONTHLY OUTCOMES")
+    if not monthly.empty:
+        print(monthly.to_string(index=False))
+    print("\nPERIOD ENTRY-STATE OUTCOMES")
+    if not periods.empty:
+        print(periods.to_string(index=False))
     print("\nFEATURES MOST ASSOCIATED WITH R (all trades, absolute Spearman)")
     all_scope = feature_summary[feature_summary["scope"] == "all"].copy()
     if not all_scope.empty:
         shown = all_scope.assign(abs_corr=all_scope["spearman_with_R"].abs()).sort_values("abs_corr", ascending=False).head(15)
         print(shown.drop(columns="abs_corr").to_string(index=False))
     print("\n" + json.dumps(report, indent=2, ensure_ascii=False))
-    print("Arquivos: entry_state_trades.csv | entry_state_feature_summary.csv | entry_state_groups.csv | entry_state_stop_comparison.csv | entry_state_report.json")
+    print("Arquivos: entry_state_trades.csv | entry_state_feature_summary.csv | entry_state_groups.csv | entry_state_stop_comparison.csv | entry_state_tp_sl_summary.csv | entry_state_focus_monthly.csv | entry_state_period_summary.csv | entry_state_report.json")
 
 
 if __name__ == "__main__":

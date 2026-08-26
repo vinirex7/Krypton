@@ -59,5 +59,8 @@ jobs:
             entry_state_feature_summary.csv
             entry_state_groups.csv
             entry_state_stop_comparison.csv
+            entry_state_tp_sl_summary.csv
+            entry_state_focus_monthly.csv
+            entry_state_period_summary.csv
             entry_state_report.json
           if-no-files-found: error
