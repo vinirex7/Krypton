@@ -1,0 +1,26 @@
+name: Krypton Research PR Checks
+
+on:
+  pull_request:
+    paths:
+      - 'research_*.py'
+      - 'execution_audit.py'
+      - 'config_search.py'
+      - 'tests/**'
+      - '.github/workflows/research-pr.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile research modules
+        run: python -m py_compile execution_audit.py research_metrics.py research_validation.py config_search.py
+      - name: Run deterministic tests
+        run: python -m unittest discover -s tests -v
