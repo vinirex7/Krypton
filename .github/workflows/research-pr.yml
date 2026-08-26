@@ -40,6 +40,7 @@ jobs:
           entry_state_diagnostics.py entry_state_ci.py config_search.py
           adaptive_portfolio.py adaptive_ml.py adaptive_validation.py range_grid.py
           adaptive_core_v2.py adaptive_core_v2_validation.py
+          adaptive_core_v3.py adaptive_core_v3_validation.py
       - name: Run deterministic tests
         run: python -m unittest discover -s tests -v
 
@@ -127,4 +128,32 @@ jobs:
             adaptive_core_v2_period_results.csv
             adaptive_core_v2_equity_curves.csv
             adaptive_core_v2_trades.csv
+          if-no-files-found: error
+
+  adaptive_core_v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run ATR-hysteresis BTC core validation
+        run: >-
+          python adaptive_core_v3_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload core v3 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-adaptive-core-v3-results
+          path: |
+            adaptive_core_v3_report.json
+            adaptive_core_v3_full_results.csv
+            adaptive_core_v3_period_results.csv
+            adaptive_core_v3_equity_curves.csv
+            adaptive_core_v3_trades.csv
           if-no-files-found: error
