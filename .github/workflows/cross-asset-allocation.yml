@@ -1,0 +1,44 @@
+name: Krypton Cross-Asset Allocation Research
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_allocation.py'
+      - 'cross_asset_allocation_validation.py'
+      - 'tests/test_cross_asset_allocation.py'
+      - '.github/workflows/cross-asset-allocation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_cross_asset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile cross-asset modules
+        run: python -m py_compile cross_asset_allocation.py cross_asset_allocation_validation.py
+      - name: Run deterministic tests
+        run: python -m unittest tests.test_cross_asset_allocation -v
+      - name: Run cross-asset allocation validation
+        run: >-
+          python cross_asset_allocation_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload cross-asset results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-allocation-results
+          path: |
+            cross_asset_allocation_report.json
+            cross_asset_allocation_full_results.csv
+            cross_asset_allocation_period_results.csv
+            cross_asset_allocation_equity_curves.csv
+            cross_asset_allocation_rebalances.csv
+            cross_asset_allocation_states.csv
+          if-no-files-found: error
