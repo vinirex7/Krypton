@@ -34,12 +34,15 @@ def concentration_metrics(trade_log: pd.DataFrame, equity_curve: pd.Series, init
 
     best5 = best_block(5)
     best20 = best_block(20)
-    denom = abs(total_pnl) if abs(total_pnl) > 1e-12 else np.nan
+    # A share of "best trades in total PnL" is not interpretable when the
+    # strategy's aggregate PnL is zero or negative. Report NaN rather than a
+    # misleading negative percentage such as -100%.
+    top5_share = float(top5 / total_pnl) if total_pnl > 1e-12 else np.nan
     return {
         "return_without_best_trade": (final_capital - best_trade) / initial_capital - 1.0,
         "return_without_best_5d": (final_capital - best5) / initial_capital - 1.0,
         "return_without_best_20d": (final_capital - best20) / initial_capital - 1.0,
-        "top_5pct_trade_pnl_share": float(top5 / denom) if np.isfinite(denom) else 0.0,
+        "top_5pct_trade_pnl_share": top5_share,
         "best_trade_pnl": best_trade,
         "best_5d_pnl": best5,
         "best_20d_pnl": best20,

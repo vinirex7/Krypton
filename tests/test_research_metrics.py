@@ -17,6 +17,13 @@ class ResearchMetricsTests(unittest.TestCase):
         self.assertGreaterEqual(out["best_20d_pnl"], out["best_5d_pnl"])
         self.assertIn("top_5pct_trade_pnl_share", out)
 
+    def test_top5_share_is_nan_when_total_pnl_is_nonpositive(self):
+        idx = pd.date_range("2025-01-01", periods=5, tz="UTC")
+        eq = pd.Series([10_000, 9_980, 9_970, 9_960, 9_950], index=idx, dtype=float)
+        trades = pd.DataFrame({"pnl": [-100.0, 50.0, -75.0]})
+        out = concentration_metrics(trades, eq)
+        self.assertTrue(np.isnan(out["top_5pct_trade_pnl_share"]))
+
     def test_dsr_is_probability(self):
         r = pd.Series([0.001, -0.0002, 0.0015, 0.0004, 0.0008] * 40)
         dsr = deflated_sharpe_ratio(r, n_trials=4)
