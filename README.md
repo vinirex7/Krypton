@@ -70,6 +70,31 @@ python walk_forward.py --start 2022-01-01
 python deep_validation.py --start 2022-01-01
 ```
 
+### Diagnóstico profundo
+
+`deep_validation.py` mantém a seleção de TP restrita ao período anterior a cada holdout e também gera:
+
+- auditoria de cobertura, datas ausentes, duplicatas, `NaN` e OHLC inválido por ativo;
+- funil diário de sinais com o motivo exato de cada bloqueio;
+- `diagnostics_2026.csv` para investigar períodos sem operações;
+- atribuição de PnL por ativo, ano, holdout e motivo de saída;
+- stress com 0, 5, 10, 20 e 50 bps adicionais de slippage por lado;
+- estabilidade diagnóstica para TP entre 2,5 e 5,0 ATR, sem usar o holdout para selecionar o TP;
+- curva OOS cronológica, incluindo retorno zero nos intervalos entre holdouts.
+
+Execução completa, salvando o relatório de terminal:
+
+```bash
+python deep_validation.py --start 2022-01-01 --diagnostics-year 2026 \
+  --stress-bps 0 5 10 20 50 --tp-grid 2.5 3.0 3.5 4.0 4.5 5.0 \
+  2>&1 | tee deep_validation_resultado.txt
+```
+
+Arquivos centrais: `deep_validation_data_audit.csv`, `deep_validation_signal_funnel.csv`,
+`deep_validation_signal_diagnostics.csv`, `diagnostics_2026.csv`,
+`deep_validation_attribution.csv`, `deep_validation_cost_stress.csv`,
+`deep_validation_tp_stability.csv` e `deep_validation_continuous_oos.csv`.
+
 Por integridade, falta de acesso ao mercado Binance USDT encerra a pesquisa com erro; o sistema não troca silenciosamente para USD/Yahoo. No GitHub Actions, os testes determinísticos rodam a cada push e a pesquisa de mercado é iniciada manualmente (`workflow_dispatch`) em um ambiente com acesso à Binance.
 
 ### Live/testnet

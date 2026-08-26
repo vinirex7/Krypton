@@ -40,6 +40,13 @@ jobs:
         run: |
           set -o pipefail
           python walk_forward.py --start 2022-01-01 | tee results/walk_forward.txt
+      - name: Run deep diagnostics
+        run: |
+          set -o pipefail
+          python deep_validation.py --start 2022-01-01 --diagnostics-year 2026 \
+            --stress-bps 0 5 10 20 50 --tp-grid 2.5 3.0 3.5 4.0 4.5 5.0 \
+            | tee results/deep_validation.txt
+          cp deep_validation_*.csv diagnostics_2026.csv results/
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
