@@ -1,31 +1,15 @@
 """Forward shadow logger for the frozen cross-asset hybrid candidate.
 
-This module is intentionally read-only: it uses public market data, never
-constructs a Binance trading client and never submits orders.  Its purpose is
-to freeze and record the information/decisions that were actually available at
-each completed daily close for a future out-of-sample paper evaluation.
-
-Frozen candidate promoted from research:
-- 90% continuity tactical sleeve + 10% cross-asset alpha sleeve
-- BTC/ETH/SOL/BNB alpha universe
-- own-SMA200 eligibility
-- mean positive 30/90/180d momentum, top 2
-- breadth >= 2, otherwise alpha stays in cash
-- inverse 20d vol + 60d covariance scaling to 15% annual target vol
-- 45 completed-daily-bar allocator cadence
-- 90d sleeve rebalance, 0.30% one-way transfer-cost assumption
-- Spot long-only, no leverage, next-open execution assumption
-
-The default forward paper epoch starts 2026-08-27 UTC, strictly after the
-research interval ending 2026-08-25.  2026 remains non-pristine for historical
-model selection, so this logger must not retroactively alter its constants.
+Read-only by design: public market data only, no Binance trading client and no
+order submission. The logger freezes and records the information/decisions that
+were actually available at each completed daily close for a future OOS paper
+evaluation.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -51,12 +35,10 @@ MOMENTUM_WINDOWS = (30, 90, 180)
 VOL_WINDOW = 20
 COV_WINDOW = 60
 
-# Public Binance market-data endpoint used by validated research CI.
 backtest.BINANCE_GLOBAL_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
 def frozen_candidate() -> dict:
-    """Canonical parameter payload used to fingerprint the shadow candidate."""
     return {
         "paper_start": PAPER_START.strftime("%Y-%m-%d"),
         "live_symbols": LIVE_SYMBOLS,
@@ -91,20 +73,29 @@ def as_utc(value=None) -> pd.Timestamp:
 
 
 def last_completed_daily_close(as_of=None) -> pd.Timestamp:
-    """Return the UTC date-label of the last fully completed Binance 1d candle."""
     ts = as_utc(as_of)
-    # Binance 1d candles labelled D complete at 00:00 UTC on D+1.  Therefore
-    # today's UTC-labelled bar is never considered completed during today.
     return ts.normalize() - pd.Timedelta(days=1)
 
 
-def rebalance_due(signal_time, paper_start=PAPER_START) -> tuple[bool, int]:
-    """Match research cadence: first paper bar is a signal, then every 45 bars."""
+def common_paper_calendar(data, signal_time, paper_start=PAPER_START) -> pd.DatetimeIndex:
+    """Return common completed bars exactly as the research allocator does."""
     ts = as_utc(signal_time).normalize()
     start = as_utc(paper_start).normalize()
-    if ts < start:
+    common = set.intersection(*[
+        set(data[s]["df"].loc[start:ts].index) for s in ALPHA_SYMBOLS
+    ])
+    return pd.DatetimeIndex(sorted(common))
+
+
+def rebalance_due_from_calendar(calendar: pd.DatetimeIndex, signal_time) -> tuple[bool, int]:
+    """Match research cadence: first common paper bar, then every 45 bars."""
+    ts = as_utc(signal_time).normalize()
+    if ts not in calendar:
         return False, -1
-    bars_since_start = int((ts - start).days)
+    loc = calendar.get_loc(ts)
+    if isinstance(loc, slice):
+        raise ValueError("duplicate shadow timestamps")
+    bars_since_start = int(loc)
     return bars_since_start % ALLOCATOR_REBALANCE_BARS == 0, bars_since_start
 
 
@@ -117,11 +108,10 @@ def _risk_on(data, ts) -> bool:
 
 
 def build_snapshot(data, signal_time, *, paper_start=PAPER_START) -> dict:
-    """Build one immutable shadow decision from completed-close information."""
     ts = as_utc(signal_time).normalize()
-    due, bars_since_start = rebalance_due(ts, paper_start)
+    calendar = common_paper_calendar(data, ts, paper_start)
+    due, bars_since_start = rebalance_due_from_calendar(calendar, ts)
 
-    # Candidate alpha weights are computed only when the frozen cadence is due.
     if due:
         alpha_target = hv2.breadth_target_weights(
             data, ALPHA_SYMBOLS, ts,
@@ -195,8 +185,6 @@ def run(as_of=None, output="cross_asset_shadow_decisions.jsonl", *, paper_start=
         _append_jsonl(output, snapshot)
         return snapshot
 
-    # _prepare_data automatically pulls 400 warm-up days so all features are
-    # causal and initialized at signal_time.
     data = wf._prepare_data(ALPHA_SYMBOLS, start.to_pydatetime(), signal_time.to_pydatetime())
     snapshot = build_snapshot(data, signal_time, paper_start=start)
     snapshot["as_of"] = asof.isoformat()
