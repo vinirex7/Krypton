@@ -9,6 +9,7 @@ on:
       - '.github/workflows/cross-asset-allocation.yml'
   workflow_dispatch:
 
+# v1 parameters are frozen in cross_asset_allocation_validation.py before results.
 jobs:
   validate_cross_asset:
     runs-on: ubuntu-latest
