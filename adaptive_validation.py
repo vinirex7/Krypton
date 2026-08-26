@@ -101,6 +101,10 @@ def run(start, end, mc_runs: int = 2000) -> dict:
         )
 
     cost_aware = ap.simulate_tactical(data, SYMBOLS, start_dt, end_dt, cost_aware=True)
+    continuity = ap.simulate_tactical(
+        data, SYMBOLS, start_dt, end_dt, cost_aware=True,
+        entry_permission=ap.persistent_state_permission(data, SYMBOLS),
+    )
     runner = ap.simulate_tactical(data, SYMBOLS, start_dt, end_dt, runner=True, cost_aware=True)
     core = ap.simulate_btc_core(data, start_dt, end_dt)
 
@@ -116,6 +120,7 @@ def run(start, end, mc_runs: int = 2000) -> dict:
     curves = {
         "baseline": baseline["equity_curve"],
         "cost_aware_tactical": cost_aware["equity_curve"],
+        "continuity_tactical": continuity["equity_curve"],
         "runner_tactical": runner["equity_curve"],
         "core40_sat60": ap.combine_sleeves(
             {"core": core["equity_curve"], "sat": cost_aware["equity_curve"]},
@@ -168,6 +173,7 @@ def run(start, end, mc_runs: int = 2000) -> dict:
         "component_metrics": {
             "baseline": _clean_metrics(baseline),
             "cost_aware": _clean_metrics(cost_aware),
+            "continuity": _clean_metrics(continuity),
             "runner": _clean_metrics(runner),
             "core": _clean_metrics(core),
             "grid": _clean_metrics(grid),

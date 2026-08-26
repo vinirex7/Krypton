@@ -122,6 +122,54 @@ def cost_gate(entry_price: float, atr: float, tp_mult: float = 3.0,
     return gross_edge > cost_multiple * ROUND_TRIP_COST
 
 
+def persistent_state_permission(
+    data,
+    symbols,
+    *,
+    min_signal_age: int = 90,
+    short_window: int = 30,
+    long_window: int = 90,
+):
+    """Block stale long states only when recent cross-asset continuity collapses.
+
+    The rule follows the previously identified causal hypothesis: a long signal
+    that has persisted for at least 90 completed daily candles is not treated as
+    a fresh entry when no configured asset has positive 30-day momentum while
+    at least two thirds still retain positive 90-day momentum.  Every input is
+    known at the signal close; execution remains at the next open.
+    """
+    if min_signal_age < 2 or short_window < 1 or long_window <= short_window:
+        raise ValueError("janelas inválidas para continuity gate")
+    ages = {}
+    short_momentum = {}
+    long_momentum = {}
+    for symbol in symbols:
+        signal = data[symbol]["signals"].sort_index().astype(int)
+        groups = signal.ne(signal.shift()).cumsum()
+        age = signal.groupby(groups).cumcount().add(1).where(signal.eq(1), 0)
+        ages[symbol] = age
+        close = data[symbol]["df"]["close"].astype(float).sort_index()
+        short_momentum[symbol] = close.pct_change(short_window)
+        long_momentum[symbol] = close.pct_change(long_window)
+
+    def allowed(symbol: str, ts: pd.Timestamp) -> bool:
+        age = ages.get(symbol)
+        if age is None or ts not in age.index or int(age.loc[ts]) < min_signal_age:
+            return True
+        short_values = [series.loc[ts] for series in short_momentum.values()
+                        if ts in series.index and pd.notna(series.loc[ts])]
+        long_values = [series.loc[ts] for series in long_momentum.values()
+                       if ts in series.index and pd.notna(series.loc[ts])]
+        if len(short_values) != len(symbols) or len(long_values) != len(symbols):
+            return True
+        short_breadth = sum(float(value) > 0 for value in short_values) / len(symbols)
+        long_breadth = sum(float(value) > 0 for value in long_values) / len(symbols)
+        stale_deterioration = short_breadth == 0.0 and long_breadth >= (2.0 / 3.0)
+        return not stale_deterioration
+
+    return allowed
+
+
 def simulate_btc_core(data, start, end) -> dict:
     """100%-of-sleeve BTC trend core, switched at the next daily open.
 
@@ -328,6 +376,14 @@ def simulate_tactical(
                     cash, trade = _sell_leg(cash, pos, half, pos.take_profit, ts, "TP_PARTIAL")
                     trades.append(trade)
                     pos.tp_taken = True
+                    # Do not let a profitable runner fall all the way back to
+                    # its original stop.  Include exit slippage and both fees
+                    # so the remaining leg's stop is approximately net-flat.
+                    net_break_even = (
+                        pos.entry_price * (1.0 + FEE_RATE)
+                        / ((1.0 - EXIT_SLIPPAGE_PCT) * (1.0 - FEE_RATE))
+                    )
+                    pos.stop_loss = max(pos.stop_loss, net_break_even)
                 else:
                     cash, trade = _sell_leg(cash, pos, pos.quantity, pos.take_profit, ts, "TP")
                     trades.append(trade)

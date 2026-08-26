@@ -72,7 +72,29 @@ class AdaptivePortfolioTests(unittest.TestCase):
         self.assertTrue(np.isfinite(audit["lagged_next_bar"]["final_capital"]))
         self.assertGreater(len(audit["lagged_equity"]), 0)
 
+    def test_persistent_state_gate_blocks_only_stale_momentum_collapse(self):
+        rows = 220
+        idx = pd.date_range("2024-01-01", periods=rows, freq="D", tz="UTC")
+        data = {}
+        for offset, symbol in enumerate(wf.BASE_WEIGHTS):
+            # Strong 90-day history followed by a 30-day decline leaves long
+            # momentum positive while short momentum is negative.
+            close = pd.Series(
+                np.r_[np.linspace(100 + offset, 200 + offset, rows - 30),
+                      np.linspace(200 + offset, 185 + offset, 30)],
+                index=idx,
+            )
+            market = prepared_market(rows=rows, signal_start=1)
+            market["df"].loc[:, "close"] = close
+            market["df"].loc[:, "open"] = close
+            market["df"].loc[:, "high"] = close + 1
+            market["df"].loc[:, "low"] = close - 1
+            market["signals"].loc[:] = 1
+            data[symbol] = market
+        allowed = ap.persistent_state_permission(data, list(wf.BASE_WEIGHTS))
+        self.assertFalse(allowed("BTCUSDT", idx[-1]))
+        self.assertTrue(allowed("BTCUSDT", idx[30]))
+
 
 if __name__ == "__main__":
     unittest.main()
-
