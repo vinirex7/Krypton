@@ -1,19 +1,21 @@
-"""Cross-asset opportunity diagnostics for Krypton research only.
+"""Cross-asset regime diagnostics for Krypton research only.
 
 The old ex-post label bull/bear/sideways uses BTC endpoint return only. That is
 not sufficient for a BTC/SOL/BNB portfolio: BTC can finish a 180-day window
 flat while altcoins experience large tradable trends.
 
-This module measures continuous, ex-post diagnostics without changing signals:
+This module reports continuous diagnostics without changing signals:
 - endpoint return per asset;
 - maximum 30/60/90-day rallies and drawdowns;
 - own-SMA200 occupancy and crossings;
 - trend efficiency and realized volatility per asset;
 - mean cross-asset SMA200 breadth;
 - gap between BTC risk-on occupancy and portfolio breadth;
-- long-trend opportunity count across assets.
+- fraction of BTC-risk-on days confirmed by >=2/3 assets above SMA200;
+- momentum breadth and realized trend-opportunity descriptors.
 
-No parameter search, no holdout access, no live changes.
+Realized future-looking quantities are descriptive only. They are never used as
+live signals or promotion rules. No parameter search or holdout access occurs.
 """
 from __future__ import annotations
 
@@ -78,30 +80,45 @@ def _cross_asset_daily(data, symbols, start, end):
     for symbol in symbols:
         item = data[symbol]
         df = item["df"].loc[_as_utc(start):_as_utc(end), ["close"]].copy()
-        df[f"above_{symbol}"] = (df["close"] > item["sma200"].reindex(df.index)).astype(float)
-        df[f"mom90_{symbol}"] = (df["close"] > df["close"].shift(90)).astype(float)
+        sma = item["sma200"].reindex(df.index)
+        df[f"above_{symbol}"] = (df["close"] > sma).where(sma.notna()).astype(float)
+        df[f"mom90_{symbol}"] = (df["close"] > df["close"].shift(90)).where(df["close"].shift(90).notna()).astype(float)
         frames.append(df[[f"above_{symbol}", f"mom90_{symbol}"]])
     joined = pd.concat(frames, axis=1).dropna(how="all")
     if joined.empty:
         return pd.DataFrame()
     above_cols = [f"above_{s}" for s in symbols]
     mom_cols = [f"mom90_{s}" for s in symbols]
-    joined["sma_breadth"] = joined[above_cols].mean(axis=1)
-    joined["momentum90_breadth"] = joined[mom_cols].mean(axis=1)
+    joined["sma_breadth"] = joined[above_cols].mean(axis=1, skipna=True)
+    joined["momentum90_breadth"] = joined[mom_cols].mean(axis=1, skipna=True)
     return joined
 
 
-def classify_opportunity(asset_metrics: dict[str, dict]) -> str:
-    """Diagnostic-only label based on realized 60-day upside opportunity."""
-    count = sum(
-        np.isfinite(m.get("best_60d_return", np.nan)) and m.get("best_60d_return", 0.0) >= RALLY_THRESHOLD
-        for m in asset_metrics.values()
-    )
-    if count >= 2:
-        return "broad_long_opportunity"
-    if count == 1:
-        return "narrow_long_opportunity"
-    return "low_long_opportunity"
+def _btc_on_confirmation(daily: pd.DataFrame):
+    if daily.empty or "above_BTCUSDT" not in daily:
+        return {
+            "mean_breadth_when_btc_on": np.nan,
+            "mean_momentum90_breadth_when_btc_on": np.nan,
+            "btc_on_days_confirmed_2of3": np.nan,
+            "btc_on_days_weak_breadth": np.nan,
+        }
+    btc_on = daily["above_BTCUSDT"] > 0.5
+    subset = daily.loc[btc_on]
+    if subset.empty:
+        return {
+            "mean_breadth_when_btc_on": np.nan,
+            "mean_momentum90_breadth_when_btc_on": np.nan,
+            "btc_on_days_confirmed_2of3": np.nan,
+            "btc_on_days_weak_breadth": np.nan,
+        }
+    strong = subset["sma_breadth"] >= (2.0 / 3.0)
+    confirmed = float(strong.mean())
+    return {
+        "mean_breadth_when_btc_on": float(subset["sma_breadth"].mean()),
+        "mean_momentum90_breadth_when_btc_on": float(subset["momentum90_breadth"].mean()),
+        "btc_on_days_confirmed_2of3": confirmed,
+        "btc_on_days_weak_breadth": 1.0 - confirmed,
+    }
 
 
 def run(data, symbols, start, end, window_days=WINDOW_DAYS):
@@ -110,6 +127,7 @@ def run(data, symbols, start, end, window_days=WINDOW_DAYS):
         strategy = fd.simulate_forensic(data, symbols, ps, pe, regime_mode="btc")
         asset = {s: _asset_metrics(data, s, ps, pe) for s in symbols}
         daily = _cross_asset_daily(data, symbols, ps, pe)
+        confirmation = _btc_on_confirmation(daily)
         btc_on = float(strategy["summary"].get("btc_pct_days_above_sma200", np.nan))
         breadth = float(daily["sma_breadth"].mean()) if not daily.empty else np.nan
         mom90 = float(daily["momentum90_breadth"].mean()) if not daily.empty else np.nan
@@ -122,7 +140,6 @@ def run(data, symbols, start, end, window_days=WINDOW_DAYS):
             "start": ps.date().isoformat(),
             "end": pe.date().isoformat(),
             "old_btc_regime": rd.classify_period(rd._btc_period_return(data, ps, pe)),
-            "opportunity_label": classify_opportunity(asset),
             "strategy_return": strategy["summary"]["strategy_return"],
             "trades": strategy["summary"]["trades"],
             "win_rate": (
@@ -134,6 +151,7 @@ def run(data, symbols, start, end, window_days=WINDOW_DAYS):
             "mean_asset_sma_breadth": breadth,
             "btc_vs_portfolio_breadth_gap": btc_on - breadth if np.isfinite(btc_on) and np.isfinite(breadth) else np.nan,
             "mean_momentum90_breadth": mom90,
+            **confirmation,
             "positive_endpoint_assets": int(sum(x > 0 for x in valid_endpoint)),
             "endpoint_assets_gt20": int(sum(x >= RALLY_THRESHOLD for x in valid_endpoint)),
             "endpoint_assets_lt_minus20": int(sum(x <= -RALLY_THRESHOLD for x in valid_endpoint)),
@@ -162,6 +180,8 @@ def compare_focus(results: pd.DataFrame, focus_period=10):
     fields = [
         "strategy_return", "win_rate", "mean_gross_exposure", "btc_risk_on_fraction",
         "mean_asset_sma_breadth", "btc_vs_portfolio_breadth_gap", "mean_momentum90_breadth",
+        "mean_breadth_when_btc_on", "mean_momentum90_breadth_when_btc_on",
+        "btc_on_days_confirmed_2of3", "btc_on_days_weak_breadth",
         "positive_endpoint_assets", "endpoint_assets_gt20", "assets_with_60d_rally_gt20",
         "mean_best_60d_return", "max_losing_streak", "median_post_exit_return_20d",
     ]
@@ -176,7 +196,7 @@ def compare_focus(results: pd.DataFrame, focus_period=10):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Krypton cross-asset opportunity diagnostics")
+    p = argparse.ArgumentParser(description="Krypton cross-asset regime diagnostics")
     p.add_argument("--start", default="2020-08-01")
     p.add_argument("--end", default="2026-06-30")
     p.add_argument("--window-days", type=int, default=WINDOW_DAYS)
@@ -194,17 +214,18 @@ def main():
         json.dump(comparison, fh, indent=2, ensure_ascii=False)
 
     display_cols = [
-        "period", "old_btc_regime", "opportunity_label", "strategy_return", "win_rate",
-        "mean_gross_exposure", "btc_risk_on_fraction", "mean_asset_sma_breadth",
-        "btc_vs_portfolio_breadth_gap", "assets_with_60d_rally_gt20", "mean_best_60d_return",
-        "positive_endpoint_assets", "endpoint_assets_gt20", "max_losing_streak",
+        "period", "old_btc_regime", "strategy_return", "win_rate", "mean_gross_exposure",
+        "btc_risk_on_fraction", "mean_asset_sma_breadth", "mean_breadth_when_btc_on",
+        "btc_on_days_confirmed_2of3", "btc_on_days_weak_breadth",
+        "btc_vs_portfolio_breadth_gap", "positive_endpoint_assets", "endpoint_assets_gt20",
+        "max_losing_streak",
     ]
     print("\nCROSS-ASSET PERIODS")
     print(results[display_cols].to_string(index=False))
     print("\nFOCUS COMPARISON")
     print(json.dumps(comparison, indent=2, ensure_ascii=False))
     print("\nArquivos: cross_asset_periods.csv | cross_asset_comparison.json")
-    print("Nota: opportunity_label é ex-post e diagnóstico; nunca entra no sinal live.")
+    print("Nota: métricas realizadas de retorno/rally são descritivas e nunca entram no sinal live.")
 
 
 if __name__ == "__main__":
