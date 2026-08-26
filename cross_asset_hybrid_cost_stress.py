@@ -22,7 +22,6 @@ import pandas as pd
 
 import adaptive_portfolio as ap
 import backtest
-import cross_asset_allocation as ca
 import cross_asset_hybrid_v2 as hv2
 import deep_validation as dv
 import walk_forward as wf
@@ -33,7 +32,6 @@ CADENCE = 45
 ALPHA_WEIGHT = 0.10
 TARGET_VOL = 0.15
 SLEEVE_REBALANCE_DAYS = 90
-BASE_TRANSFER_COST = 0.003
 backtest.BINANCE_GLOBAL_URL = "https://data-api.binance.vision/api/v3/klines"
 
 # Pre-declared stress grid: no signal/weight parameters vary.
@@ -92,17 +90,27 @@ def checks(periods):
 
 
 def _simulate_alpha(data, s, e, exchange_mult):
-    old_fee, old_entry, old_exit = ca.FEE_RATE, ca.ENTRY_SLIPPAGE_PCT, ca.EXIT_SLIPPAGE_PCT
+    """Stress the constants actually consumed by the breadth executor.
+
+    hv2 imported fee/slippage constants by value, so mutating the lower-level
+    cross_asset_allocation module would not affect execution. Patch hv2 itself
+    and restore unconditionally after each scenario.
+    """
+    old_fee = hv2.FEE_RATE
+    old_entry = hv2.ENTRY_SLIPPAGE_PCT
+    old_exit = hv2.EXIT_SLIPPAGE_PCT
     try:
-        ca.FEE_RATE = old_fee * exchange_mult
-        ca.ENTRY_SLIPPAGE_PCT = old_entry * exchange_mult
-        ca.EXIT_SLIPPAGE_PCT = old_exit * exchange_mult
+        hv2.FEE_RATE = old_fee * exchange_mult
+        hv2.ENTRY_SLIPPAGE_PCT = old_entry * exchange_mult
+        hv2.EXIT_SLIPPAGE_PCT = old_exit * exchange_mult
         return hv2.simulate_breadth_allocator(
             data, ALLOC_SYMBOLS, s, e, target_vol=TARGET_VOL,
             top_n=2, min_selected=2, rebalance_days=CADENCE,
         )
     finally:
-        ca.FEE_RATE, ca.ENTRY_SLIPPAGE_PCT, ca.EXIT_SLIPPAGE_PCT = old_fee, old_entry, old_exit
+        hv2.FEE_RATE = old_fee
+        hv2.ENTRY_SLIPPAGE_PCT = old_entry
+        hv2.EXIT_SLIPPAGE_PCT = old_exit
 
 
 def run(start, end, mc_runs=5000):
@@ -123,8 +131,10 @@ def run(start, end, mc_runs=5000):
     curves = {"baseline": baseline["equity_curve"],
               "continuity_tactical": continuity["equity_curve"]}
     logs = []
+    alpha_final = {}
     for scenario, cfg in SCENARIOS.items():
         alpha = _simulate_alpha(data, s, e, cfg["exchange_mult"])
+        alpha_final[scenario] = float(alpha["final_capital"])
         name = f"hybrid_{scenario}"
         curves[name] = hv2.combine_rebalanced_sleeves(
             continuity["equity_curve"], alpha["equity_curve"], ALPHA_WEIGHT,
@@ -136,9 +146,15 @@ def run(start, end, mc_runs=5000):
             x["scenario"] = scenario
             logs.append(x)
 
+    # Regression guard: the exchange-cost shock must have a measurable effect.
+    if np.isclose(alpha_final["standard"], alpha_final["double_exchange"], rtol=0, atol=1e-8):
+        raise AssertionError("exchange cost stress ineffective")
+    if not alpha_final["double_exchange"] < alpha_final["standard"]:
+        raise AssertionError("higher exchange costs unexpectedly improved alpha final capital")
+
     periods = period_table(curves, s, e)
     gate = checks(periods)
-    stress_passed = all(gate[f"hybrid_{s}"]["passed"] for s in SCENARIOS)
+    stress_passed = all(gate[f"hybrid_{scenario}"]["passed"] for scenario in SCENARIOS)
     full = pd.DataFrame([{"variant": n, **ap.performance_metrics(c)} for n, c in curves.items()])
     mc = {n: dv.block_bootstrap_monte_carlo(c.pct_change().dropna(), runs=mc_runs, seed=42)
           for n, c in curves.items()}
@@ -150,10 +166,12 @@ def run(start, end, mc_runs=5000):
         "cross_asset_hybrid_cost_stress_rebalances.csv", index=False)
     report = {
         "start": start, "end": end, "candidate": "hybrid_a10_r45",
-        "scenarios": SCENARIOS, "stress_passed_all": stress_passed,
+        "scenarios": SCENARIOS, "alpha_final_capital": alpha_final,
+        "stress_passed_all": stress_passed,
         "promotion_checks": gate, "monte_carlo": mc,
         "guardrails": {"live_changed": False, "spot_only": True, "leverage": 1.0,
                        "signals_unchanged": True, "stress_grid_frozen_before_results": True,
+                       "exchange_cost_stress_effect_verified": True,
                        "2026_is_pristine_holdout": False,
                        "promotion_requires_future_paper": True},
     }
@@ -161,6 +179,7 @@ def run(start, end, mc_runs=5000):
         json.dump(report, f, indent=2, default=str)
     print("\nFULL\n", full.to_string(index=False))
     print("\nRETURNS\n", periods.pivot(index="variant", columns="period", values="return").to_string())
+    print("\nALPHA FINAL\n", json.dumps(alpha_final, indent=2))
     print("\nCHECKS\n", json.dumps(gate, indent=2))
     print("\nSTRESS_PASSED_ALL", stress_passed)
     return report
