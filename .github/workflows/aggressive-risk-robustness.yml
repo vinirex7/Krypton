@@ -1,0 +1,32 @@
+name: Aggressive Risk Robustness
+
+on:
+  push:
+    branches: [research/aggressive-risk-frontier-v1]
+  workflow_dispatch:
+
+jobs:
+  robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Compile
+        run: python -m py_compile aggressive_risk_frontier_robustness.py
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+      - name: Neighbor and 2x-cost robustness
+        run: python aggressive_risk_frontier_robustness.py --start 2020-08-01 --end 2026-08-25 --mc-runs 5000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krypton-aggressive-risk-robustness-results
+          path: |
+            aggressive_risk_robustness_full.csv
+            aggressive_risk_robustness_curves.csv
+            aggressive_risk_robustness_report.json
+          retention-days: 30
