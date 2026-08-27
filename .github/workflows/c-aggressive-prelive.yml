@@ -1,0 +1,35 @@
+name: C Aggressive Pre-Live Validation
+
+on:
+  push:
+    branches: [research/c-aggressive-prelive-v1]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Compile
+        run: python -m py_compile c_only_pre_live_validation.py adaptive_portfolio.py cross_asset_hybrid_v2.py cross_asset_allocation.py
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+      - name: Run C-only battery
+        run: python c_only_pre_live_validation.py --start 2020-08-01 --end 2026-08-25 --mc-runs 5000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krypton-c-aggressive-prelive-results
+          path: |
+            c_only_full.csv
+            c_only_periods.csv
+            c_only_recent_windows.csv
+            c_only_curves.csv
+            c_only_throttle_log.csv
+            c_only_report.json
+          retention-days: 30
