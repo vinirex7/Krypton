@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -44,8 +44,7 @@ def _period_months(start, end):
 
 def _read_zip_csv(content: bytes, columns: list[str]) -> pd.DataFrame:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        name = zf.namelist()[0]
-        raw = pd.read_csv(zf.open(name), header=None)
+        raw = pd.read_csv(zf.open(zf.namelist()[0]), header=None)
     if raw.empty:
         return pd.DataFrame(columns=columns)
     first = str(raw.iloc[0, 0]).strip().lower()
@@ -194,11 +193,8 @@ def simulate_funding_carry(spot_data, futures_data, symbols, start, end, *,
         for sym, p in list(positions.items()):
             spot_open = float(spot_data[sym]["df"].loc[ts, "open"])
             fut_open = float(futures_data[sym]["perp"].loc[ts, "open"])
-            # Bring short PnL from prior close to this open.
             cash += p.fut_qty * (p.prev_fut_mark - fut_open)
-            # Buy back short: adverse slippage + taker fee.
             cash -= p.fut_qty * fut_open * (FUTURES_SLIPPAGE + FUTURES_TAKER_FEE)
-            # Sell spot: adverse slippage + spot fee.
             spot_px = spot_open * (1.0 - EXIT_SLIPPAGE_PCT)
             cash += p.spot_qty * spot_px * (1.0 - FEE_RATE)
             logs.append({"event": "close", "symbol": sym, "execution_time": ts})
@@ -225,7 +221,6 @@ def simulate_funding_carry(spot_data, futures_data, symbols, start, end, *,
                          "notional": per_notional})
 
     for i, ts in enumerate(calendar):
-        # Execute yesterday's/previous signal at today's open.
         if pending is not None:
             close_all(ts)
             open_selected(ts, pending)
@@ -234,7 +229,6 @@ def simulate_funding_carry(spot_data, futures_data, symbols, start, end, *,
                     row["signal_time"] = pending_signal_time
             pending = None
 
-        # Daily short PnL from open (or prior close) to close + funding cashflow.
         for sym, p in list(positions.items()):
             fut = futures_data[sym]["perp"]
             if ts not in fut.index:
@@ -247,12 +241,8 @@ def simulate_funding_carry(spot_data, futures_data, symbols, start, end, *,
             cash += funding_cash
             total_funding += funding_cash
 
-        eq = equity_at(ts, "close")
-        points.append((ts, eq))
+        points.append((ts, equity_at(ts, "close")))
 
-        # Conservative isolated-futures liquidation proxy. Test the intraday
-        # high of every short simultaneously and require a 1% maintenance buffer.
-        # Spot gains are deliberately NOT allowed to rescue Futures collateral.
         if positions:
             worst_cash = cash
             maintenance = 0.0
@@ -284,11 +274,13 @@ def simulate_funding_carry(spot_data, futures_data, symbols, start, end, *,
                 if np.isfinite(apr) and apr >= threshold:
                     scored.append((apr, sym))
             scored.sort(reverse=True)
-            pending = [sym for _, sym in scored[:top_n]]
-            pending_signal_time = ts
+            selected = [sym for _, sym in scored[:top_n]]
+            # A review cadence is not a forced turnover cadence. If the desired
+            # hedge set is unchanged, keep both legs open and avoid needless fees.
+            pending = None if set(selected) == held else selected
+            pending_signal_time = ts if pending is not None else None
             last_signal_i = i
 
-    # Liquidate at final close with conservative exit costs.
     ts = calendar[-1]
     for sym, p in list(positions.items()):
         spot_close = float(spot_data[sym]["df"].loc[ts, "close"])
