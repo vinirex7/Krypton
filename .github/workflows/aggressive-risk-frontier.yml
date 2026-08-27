@@ -1,0 +1,38 @@
+name: Aggressive Risk Frontier Research
+
+on:
+  push:
+    branches: [research/aggressive-risk-frontier-v1]
+  pull_request:
+    branches: [research/carry-market-neutral-v1, research/adaptive-portfolio-v1]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile research modules
+        run: python -m py_compile aggressive_risk_frontier_validation.py adaptive_portfolio.py cross_asset_hybrid_v2.py
+      - name: Deterministic tests
+        run: python -m unittest discover -s tests -v
+      - name: Run frozen aggressive frontier
+        run: python aggressive_risk_frontier_validation.py --start 2020-08-01 --end 2026-08-25 --mc-runs 5000
+      - name: Upload research artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-aggressive-risk-frontier-results
+          path: |
+            aggressive_risk_frontier_full.csv
+            aggressive_risk_frontier_periods.csv
+            aggressive_risk_frontier_curves.csv
+            aggressive_risk_frontier_components.csv
+            aggressive_risk_frontier_report.json
+          retention-days: 30
