@@ -13,13 +13,29 @@ logger = logging.getLogger("Krypton.Risk")
 
 
 class RiskManager:
-    def __init__(self, initial_capital: float):
+    def __init__(
+        self,
+        initial_capital: float,
+        *,
+        risk_per_trade: float = RISK_PER_TRADE,
+        max_drawdown_pct: float = MAX_DRAWDOWN_PCT,
+        circuit_breaker_pct: float = CIRCUIT_BREAKER_PCT,
+    ):
         self.initial_capital = initial_capital
         self.peak_capital = initial_capital
         self.daily_start_cap = initial_capital
         self.daily_date = None
         self.halted = False
         self.circuit_breaker = False
+        self.risk_per_trade = float(risk_per_trade)
+        self.max_drawdown_pct = float(max_drawdown_pct)
+        self.circuit_breaker_pct = float(circuit_breaker_pct)
+        if not 0 < self.risk_per_trade < 1:
+            raise ValueError("risk_per_trade deve estar em (0,1)")
+        if not 0 < self.max_drawdown_pct < 1:
+            raise ValueError("max_drawdown_pct deve estar em (0,1)")
+        if not 0 < self.circuit_breaker_pct < 1:
+            raise ValueError("circuit_breaker_pct deve estar em (0,1)")
 
     def reset_daily(self, current_capital: float, current_date) -> None:
         """Reset idempotente: só troca a base quando o dia UTC mudou."""
@@ -36,12 +52,12 @@ class RiskManager:
         if self.daily_start_cap <= 0:
             return self.circuit_breaker
         daily_loss = (self.daily_start_cap - current_capital) / self.daily_start_cap
-        if daily_loss >= CIRCUIT_BREAKER_PCT:
+        if daily_loss >= self.circuit_breaker_pct:
             self.circuit_breaker = True
             logger.warning(
                 "CIRCUIT BREAKER | perda diária %.2f%% >= %.2f%%",
                 daily_loss * 100,
-                CIRCUIT_BREAKER_PCT * 100,
+                self.circuit_breaker_pct * 100,
             )
         return self.circuit_breaker
 
@@ -49,12 +65,12 @@ class RiskManager:
         if self.peak_capital <= 0:
             return self.halted
         drawdown = (self.peak_capital - current_capital) / self.peak_capital
-        if drawdown >= MAX_DRAWDOWN_PCT:
+        if drawdown >= self.max_drawdown_pct:
             self.halted = True
             logger.critical(
                 "MAX DRAWDOWN | %.2f%% >= %.2f%% | HALT",
                 drawdown * 100,
-                MAX_DRAWDOWN_PCT * 100,
+                self.max_drawdown_pct * 100,
             )
         return self.halted
 
@@ -76,7 +92,7 @@ class RiskManager:
         """Arrisca sobre a equity, limitado pelo peso do ativo e caixa livre."""
         sl_distance = atr * STOP_LOSS_ATR_MULT
         tp_distance = atr * TAKE_PROFIT_ATR_MULT
-        risk_amount = capital * RISK_PER_TRADE
+        risk_amount = capital * self.risk_per_trade
         quantity = risk_amount / sl_distance if sl_distance > 0 else 0.0
 
         allocation_cap = capital * max(min(allocation_pct, 1.0), 0.0)
@@ -104,10 +120,23 @@ class RiskManager:
             "daily_date": self.daily_date.isoformat() if self.daily_date else None,
             "halted": self.halted,
             "circuit_breaker": self.circuit_breaker,
+            "risk_per_trade": self.risk_per_trade,
+            "max_drawdown_pct": self.max_drawdown_pct,
+            "circuit_breaker_pct": self.circuit_breaker_pct,
         }
 
     def restore(self, state: dict) -> None:
         from datetime import date
+
+        saved_risk = float(state.get("risk_per_trade", self.risk_per_trade))
+        saved_dd = float(state.get("max_drawdown_pct", self.max_drawdown_pct))
+        saved_cb = float(state.get("circuit_breaker_pct", self.circuit_breaker_pct))
+        if abs(saved_risk - self.risk_per_trade) > 1e-12:
+            raise RuntimeError("Estado de risco incompatível: risk_per_trade mudou")
+        if abs(saved_dd - self.max_drawdown_pct) > 1e-12:
+            raise RuntimeError("Estado de risco incompatível: max_drawdown_pct mudou")
+        if abs(saved_cb - self.circuit_breaker_pct) > 1e-12:
+            raise RuntimeError("Estado de risco incompatível: circuit_breaker_pct mudou")
 
         self.initial_capital = float(state.get("initial_capital", self.initial_capital))
         self.peak_capital = max(float(state.get("peak_capital", self.peak_capital)), self.peak_capital)
@@ -134,4 +163,6 @@ class RiskManager:
             "circuit_breaker": self.circuit_breaker,
             "halted": self.halted,
             "can_trade": not (self.halted or self.circuit_breaker),
+            "risk_per_trade": self.risk_per_trade,
+            "max_drawdown_pct": self.max_drawdown_pct,
         }
