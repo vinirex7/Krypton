@@ -1,0 +1,45 @@
+name: Krypton Market-Neutral Carry Research
+
+on:
+  pull_request:
+    paths:
+      - 'carry_market_neutral.py'
+      - 'carry_market_neutral_validation.py'
+      - 'tests/test_carry_market_neutral.py'
+      - '.github/workflows/carry-market-neutral.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_carry:
+    if: github.event_name == 'workflow_dispatch' || github.base_ref == 'research/adaptive-portfolio-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile carry modules
+        run: python -m py_compile carry_market_neutral.py carry_market_neutral_validation.py
+      - name: Run deterministic carry tests
+        run: python -m unittest tests.test_carry_market_neutral -v
+      - name: Run market-neutral carry validation
+        run: >-
+          python carry_market_neutral_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload carry results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-market-neutral-carry-results
+          path: |
+            carry_market_neutral_report.json
+            carry_market_neutral_full_results.csv
+            carry_market_neutral_period_results.csv
+            carry_market_neutral_equity_curves.csv
+            carry_market_neutral_trades.csv
+            carry_market_neutral_funding_summary.csv
+          if-no-files-found: error
