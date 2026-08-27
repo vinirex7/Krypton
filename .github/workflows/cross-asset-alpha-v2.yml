@@ -1,0 +1,51 @@
+name: Krypton Cross-Asset Alpha V2 Research
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_alpha_v2.py'
+      - 'cross_asset_alpha_v2_validation.py'
+      - 'cross_asset_hybrid_v2.py'
+      - 'cross_asset_allocation.py'
+      - 'tests/test_cross_asset_alpha_v2.py'
+      - '.github/workflows/cross-asset-alpha-v2.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_alpha_v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile Alpha v2 modules
+        run: >-
+          python -m py_compile
+          cross_asset_allocation.py
+          cross_asset_hybrid_v2.py
+          cross_asset_alpha_v2.py
+          cross_asset_alpha_v2_validation.py
+          tests/test_cross_asset_alpha_v2.py
+      - name: Run deterministic Alpha v2 tests
+        run: python -m unittest tests.test_cross_asset_alpha_v2 -v
+      - name: Run frozen Alpha v2 validation
+        run: >-
+          python cross_asset_alpha_v2_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload Alpha v2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-alpha-v2
+          path: |
+            cross_asset_alpha_v2_report.json
+            cross_asset_alpha_v2_full.csv
+            cross_asset_alpha_v2_periods.csv
+            cross_asset_alpha_v2_curves.csv
+            cross_asset_alpha_v2_rebalances.csv
+          if-no-files-found: error
