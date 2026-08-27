@@ -1,0 +1,40 @@
+name: Krypton Mean-Reversion Alpha Research
+
+on:
+  pull_request:
+    paths:
+      - 'mean_reversion_alpha.py'
+      - 'mean_reversion_validation.py'
+      - '.github/workflows/mean-reversion-alpha.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_mean_reversion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile mean-reversion modules
+        run: python -m py_compile mean_reversion_alpha.py mean_reversion_validation.py
+      - name: Run frozen mean-reversion validation
+        run: >-
+          python mean_reversion_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload mean-reversion results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-mean-reversion-alpha-v1
+          path: |
+            mean_reversion_report.json
+            mean_reversion_full.csv
+            mean_reversion_periods.csv
+            mean_reversion_curves.csv
+            mean_reversion_trades.csv
+          if-no-files-found: error
