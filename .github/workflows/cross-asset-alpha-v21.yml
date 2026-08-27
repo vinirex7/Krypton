@@ -1,0 +1,36 @@
+name: Krypton Cross-Asset Alpha V21 Research
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_alpha_v21.py'
+      - 'cross_asset_alpha_v21_validation.py'
+      - '.github/workflows/cross-asset-alpha-v21.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_alpha_v21:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile v2.1
+        run: python -m py_compile cross_asset_alpha_v21.py cross_asset_alpha_v21_validation.py
+      - name: Run frozen v2.1 validation
+        run: python cross_asset_alpha_v21_validation.py --start 2020-08-01 --end 2026-08-25 --mc-runs 5000
+      - name: Upload v2.1 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-alpha-v21
+          path: |
+            cross_asset_alpha_v21_report.json
+            cross_asset_alpha_v21_full.csv
+            cross_asset_alpha_v21_periods.csv
+            cross_asset_alpha_v21_curves.csv
+            cross_asset_alpha_v21_rebalances.csv
+          if-no-files-found: error
