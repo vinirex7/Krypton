@@ -1,0 +1,36 @@
+name: Aggressive C Live Validation
+
+on:
+  push:
+    branches: [feature/live-aggressive-c]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Compile live modules
+        run: python -m py_compile aggressive_c_live.py live_c.py risk_manager.py config.py
+      - name: Run deterministic test suite
+        run: python -m unittest discover -s tests -v
+      - name: Assert production switch is explicit
+        run: |
+          python - <<'PY'
+          import config
+          assert config.LIVE_STRATEGY == 'AGGRESSIVE_C'
+          assert config.USE_TESTNET is True, 'Repository must default to TESTNET; production requires explicit env switch'
+          assert abs(config.AGGRESSIVE_C_TACTICAL_WEIGHT - .55) < 1e-12
+          assert abs(config.AGGRESSIVE_C_ALPHA_WEIGHT - .45) < 1e-12
+          assert abs(config.AGGRESSIVE_C_TACTICAL_RISK_PER_TRADE - .02) < 1e-12
+          assert abs(config.AGGRESSIVE_C_ALPHA_TARGET_VOL - .30) < 1e-12
+          assert abs(config.AGGRESSIVE_C_MAX_DRAWDOWN_PCT - .30) < 1e-12
+          PY
