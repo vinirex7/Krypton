@@ -1,0 +1,27 @@
+name: C Asset Exposure Diagnostic
+
+on:
+  push:
+    branches: [research/c-aggressive-prelive-v1]
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile c_asset_exposure_diagnostic.py
+      - run: python c_asset_exposure_diagnostic.py --start 2020-08-01 --end 2026-08-25
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krypton-c-asset-exposure-results
+          path: |
+            c_asset_exposure_rebalances.csv
+            c_asset_exposure_report.json
+          retention-days: 30
