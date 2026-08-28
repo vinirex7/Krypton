@@ -80,6 +80,15 @@ AGGRESSIVE_C_ALPHA_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
 AGGRESSIVE_C_STATE_DB_FILE = os.getenv("AGGRESSIVE_C_STATE_DB_FILE", "krypton_c_state.db")
 AGGRESSIVE_C_REQUIRE_CLEAN_START = os.getenv("AGGRESSIVE_C_REQUIRE_CLEAN_START", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+# Pool opcional de capital: Spot USDT + USDT próprio/transferível em Cross Margin.
+# Continua Spot long-only 1x: o bot nunca toma empréstimo e nunca envia ordem Margin.
+# O default é false para exigir opt-in explícito no VPS.
+AGGRESSIVE_C_USE_MARGIN_CAPITAL_POOL = os.getenv(
+    "AGGRESSIVE_C_USE_MARGIN_CAPITAL_POOL", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+# Pequena folga física ao mover Margin -> Spot antes de uma BUY. Não altera sizing.
+AGGRESSIVE_C_MARGIN_TRANSFER_BUFFER_PCT = 0.002
+
 # Segurança operacional: o repositório continua iniciando em TESTNET por padrão.
 # Para capital real, definir USE_TESTNET=false explicitamente no .env do VPS.
 USE_TESTNET = os.getenv("USE_TESTNET", "true").strip().lower() in {"1", "true", "yes", "on"}
