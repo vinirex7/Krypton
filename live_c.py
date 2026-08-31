@@ -106,6 +106,11 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
             except Exception:
                 logger.exception("Falha no ciclo manual DECISION NOW")
 
+        # Se o pedido manual foi consumido dentro da janela normal, não repita o
+        # mesmo ciclo imediatamente no primeiro giro do loop.
+        if manual_ran and now.hour == 0 and now.minute >= 5:
+            last_daily_run = now.date()
+
         if not manual_ran and now.hour == 0 and 5 <= now.minute < 10:
             self.daily_cycle()
             last_daily_run = now.date()
