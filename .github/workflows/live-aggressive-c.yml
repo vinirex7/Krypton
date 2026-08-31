@@ -22,13 +22,16 @@ jobs:
         run: python -m py_compile aggressive_c_live.py binance_client.py live_c.py risk_manager.py config.py tradebot.py
       - name: Run deterministic test suite
         run: python -m unittest discover -s tests -v
-      - name: Assert production switch is explicit
+      - name: Assert production switch and Spot-only execution
         run: |
           python - <<'PY'
           import config
+          from binance_client import BinanceInterface
           assert config.LIVE_STRATEGY == 'AGGRESSIVE_C'
           assert config.USE_TESTNET is True, 'Repository must default to TESTNET; production requires explicit env switch'
           assert not hasattr(config, 'AGGRESSIVE_C_USE_MARGIN_CAPITAL_POOL'), 'Aggressive C live must remain Spot-only'
+          assert not hasattr(BinanceInterface, 'get_margin_capital_snapshot')
+          assert not hasattr(BinanceInterface, '_ensure_spot_quote')
           assert abs(config.AGGRESSIVE_C_TACTICAL_WEIGHT - .55) < 1e-12
           assert abs(config.AGGRESSIVE_C_ALPHA_WEIGHT - .45) < 1e-12
           assert abs(config.AGGRESSIVE_C_TACTICAL_RISK_PER_TRADE - .02) < 1e-12
