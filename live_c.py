@@ -13,7 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aggressive_c_live import AggressiveCTradeBot
-from config import AGGRESSIVE_C_MAX_DRAWDOWN_PCT, LIVE_QUOTE_ASSET, LOG_FILE, USE_TESTNET
+from config import (
+    AGGRESSIVE_C_ALPHA_SYMBOLS,
+    AGGRESSIVE_C_MAX_DRAWDOWN_PCT,
+    LIVE_QUOTE_ASSET,
+    LOG_FILE,
+    USE_TESTNET,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,10 +58,11 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
         return True
 
     def _clear_halt_if_safe(self) -> bool:
-        """Libera somente o halt global quando a conta Spot reconciliou e DD atual é seguro.
+        """Libera somente um halt global contábil após reconciliação Spot segura.
 
-        Não altera peak, histórico, posições, sleeves nem um halt próprio do
-        RiskManager tático. Assim um drawdown tático real não é apagado.
+        Não altera peak, histórico, posições nem um halt próprio do RiskManager
+        tático. Se o alpha ficou zerado durante o halt, marca-o como devido para
+        que a próxima decisão possa reconstruir o sleeve pela regra normal.
         """
         self._reconcile_exchange_state()
         equity, dd = self._portfolio_risk_update()
@@ -71,7 +78,15 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
         if self.tactical_risk.halted:
             logger.critical("CLEAR HALT recusado | RiskManager tático permanece halted")
             return False
+
+        alpha_flat = all(
+            float(self.state.get("alpha_qty", {}).get(symbol, 0.0)) <= 0
+            for symbol in AGGRESSIVE_C_ALPHA_SYMBOLS
+        )
         self.state["portfolio_halted"] = False
+        if alpha_flat:
+            self.state["last_alpha_rebalance"] = None
+            logger.warning("Alpha estava zerado durante o halt; próximo ciclo reavalia o target imediatamente")
         self._save_state()
         logger.warning(
             "Portfolio halt liberado manualmente após reconciliação Spot | equity=%.2f %s | DD=%.2f%%",
@@ -105,11 +120,6 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
                 manual_ran = True
             except Exception:
                 logger.exception("Falha no ciclo manual DECISION NOW")
-
-        # Se o pedido manual foi consumido dentro da janela normal, não repita o
-        # mesmo ciclo imediatamente no primeiro giro do loop.
-        if manual_ran and now.hour == 0 and now.minute >= 5:
-            last_daily_run = now.date()
 
         if not manual_ran and now.hour == 0 and 5 <= now.minute < 10:
             self.daily_cycle()
