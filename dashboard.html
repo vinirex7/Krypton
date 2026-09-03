@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Krypton Dashboard</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#07090d;color:#eef3f8}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#080b10 0,#0d1118 100%);min-height:100vh}.wrap{max-width:1200px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:24px}.brand{font-weight:800;letter-spacing:.18em}.status{font-size:13px;padding:7px 10px;border:1px solid #263342;border-radius:999px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{background:#101722;border:1px solid #1f2a38;border-radius:18px;padding:18px;box-shadow:0 10px 32px #0003}.k{font-size:12px;color:#91a0b3;text-transform:uppercase;letter-spacing:.08em}.v{font-size:28px;font-weight:750;margin-top:6px}.positive{color:#73e0a7}.negative{color:#ff8e8e}.section{margin-top:18px}.section h2{font-size:16px;margin:0 0 12px}.chart{height:220px;display:flex;align-items:flex-end;gap:2px;border-top:1px solid #1f2a38;padding-top:12px}.bar{flex:1;min-width:2px;background:#71859e;border-radius:2px 2px 0 0;opacity:.8}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:11px 8px;border-bottom:1px solid #1e2936}th{color:#8494a8;font-weight:600}.pill{padding:4px 8px;border-radius:999px;background:#1c2734;font-size:11px}.login{max-width:420px;margin:11vh auto;background:#101722;border:1px solid #1f2a38;border-radius:20px;padding:24px}input,button{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #263342;background:#0b1119;color:white;margin-top:10px}button{cursor:pointer;background:#e7edf4;color:#0a0d12;font-weight:750}.muted{color:#8390a2;font-size:13px}.hidden{display:none}@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:18px}}@media(max-width:480px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div id="login" class="login">
+  <div class="brand">KRYPTON</div>
+  <h1>Área do cliente</h1>
+  <p class="muted">Acompanhe patrimônio, decisões e operações do seu Krypton.</p>
+  <input id="email" type="email" placeholder="E-mail" autocomplete="email" />
+  <input id="password" type="password" placeholder="Senha" autocomplete="current-password" />
+  <button onclick="login()">Entrar</button>
+  <p id="loginError" class="negative"></p>
+</div>
+<div id="app" class="wrap hidden">
+  <div class="top"><div><div class="brand">KRYPTON</div><div class="muted">Dashboard do contratante</div></div><div id="status" class="status">carregando…</div></div>
+  <div class="grid">
+    <div class="card"><div class="k">Patrimônio</div><div id="equity" class="v">—</div></div>
+    <div class="card"><div class="k">Retorno acumulado</div><div id="return" class="v">—</div></div>
+    <div class="card"><div class="k">Drawdown atual</div><div id="dd" class="v">—</div></div>
+    <div class="card"><div class="k">Modo</div><div id="mode" class="v">—</div></div>
+  </div>
+  <div class="card section"><h2>Curva de patrimônio</h2><div id="chart" class="chart"></div></div>
+  <div class="card section"><h2>Últimas decisões</h2><div style="overflow:auto"><table><thead><tr><th>Horário</th><th>Ativo</th><th>Sleeve</th><th>Decisão</th><th>Motivo</th></tr></thead><tbody id="decisions"></tbody></table></div></div>
+  <div class="card section"><h2>Ordens recentes</h2><div style="overflow:auto"><table><thead><tr><th>Horário</th><th>Ativo</th><th>Lado</th><th>Qtd.</th><th>Preço</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table></div></div>
+  <div class="card section"><h2>Trades realizados</h2><div style="overflow:auto"><table><thead><tr><th>Horário</th><th>Ativo</th><th>Entrada</th><th>Saída</th><th>PnL</th><th>Retorno</th></tr></thead><tbody id="trades"></tbody></table></div></div>
+</div>
+<script>
+const fmtMoney=v=>v==null?'—':new Intl.NumberFormat('pt-BR',{style:'currency',currency:'USD'}).format(v);
+const fmtPct=v=>v==null?'—':(v*100).toFixed(2)+'%';
+const fmtTime=v=>v?new Date(v).toLocaleString('pt-BR'): '—';
+function setSigned(el,v){el.textContent=fmtPct(v);el.className='v '+(v>0?'positive':v<0?'negative':'')}
+async function login(){const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value,password:password.value})});if(!r.ok){loginError.textContent='E-mail ou senha inválidos.';return}const d=await r.json();localStorage.setItem('kryptonToken',d.token);showApp();await refresh()}
+function showApp(){login.classList.add('hidden');app.classList.remove('hidden')}
+async function refresh(){const token=localStorage.getItem('kryptonToken');if(!token)return;const r=await fetch('/api/dashboard',{headers:{Authorization:'Bearer '+token}});if(r.status===401){localStorage.removeItem('kryptonToken');location.reload();return}const d=await r.json();const s=d.summary;equity.textContent=fmtMoney(s.equity);setSigned(document.getElementById('return'),s.total_return);dd.textContent=fmtPct(s.drawdown);mode.textContent=s.mode||'—';status.textContent=(s.halted?'🔴 HALTED':'🟢 ONLINE')+(s.updated_at?' · '+fmtTime(s.updated_at):'');drawChart(d.snapshots);decisions.innerHTML=d.decisions.map(x=>`<tr><td>${fmtTime(x.ts)}</td><td>${x.symbol}</td><td>${x.sleeve}</td><td><span class="pill">${x.decision}</span></td><td>${x.public_reason}</td></tr>`).join('');orders.innerHTML=d.orders.map(x=>`<tr><td>${fmtTime(x.ts)}</td><td>${x.symbol}</td><td>${x.side}</td><td>${Number(x.quantity).toFixed(6)}</td><td>${x.fill_price==null?'—':Number(x.fill_price).toFixed(4)}</td><td>${x.status||'—'}</td></tr>`).join('');trades.innerHTML=d.trades.map(x=>`<tr><td>${fmtTime(x.ts)}</td><td>${x.symbol}</td><td>${x.entry_price==null?'—':Number(x.entry_price).toFixed(4)}</td><td>${x.exit_price==null?'—':Number(x.exit_price).toFixed(4)}</td><td>${x.pnl==null?'—':Number(x.pnl).toFixed(2)}</td><td>${fmtPct(x.return_pct)}</td></tr>`).join('')}
+function drawChart(xs){const c=document.getElementById('chart');c.innerHTML='';if(!xs.length){c.innerHTML='<span class="muted">Sem snapshots ainda.</span>';return}const vals=xs.map(x=>Number(x.equity));const lo=Math.min(...vals),hi=Math.max(...vals),span=Math.max(hi-lo,1e-9);xs.forEach(x=>{const b=document.createElement('div');b.className='bar';b.style.height=(20+80*(Number(x.equity)-lo)/span)+'%';b.title=fmtTime(x.ts)+' · '+fmtMoney(x.equity);c.appendChild(b)})}
+if(localStorage.getItem('kryptonToken')){showApp();refresh()}setInterval(()=>{if(localStorage.getItem('kryptonToken'))refresh()},15000);
+</script>
+</body>
+</html>
