@@ -20,6 +20,9 @@ ENV/
 tradebot.log
 *.log
 krypton_state.db
+krypton_c_state.db
+krypton_dashboard.db
+krypton_dashboard.db-*
 *.csv
 
 # Build / distribuição
