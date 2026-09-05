@@ -28,6 +28,7 @@ class SpotOnlyAndManualControlTests(unittest.TestCase):
         fake = FakeSpotClient()
         b = BinanceInterface.__new__(BinanceInterface)
         b.client = fake
+        self.assertEqual(b.get_asset_balance("BTC"), {"free": 0.001, "locked": 0.002, "total": 0.003})
         self.assertAlmostEqual(b.get_account_balance("USDT"), 123.45)
         self.assertAlmostEqual(b.get_asset_total("USDT"), 130.00)
         self.assertEqual(fake.margin_calls, 0)
