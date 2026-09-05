@@ -359,47 +359,142 @@ class AggressiveCTradeBot:
             logger.critical("AGGRESSIVE C PORTFOLIO HALT | DD %.2f%% >= %.2f%%", dd * 100, AGGRESSIVE_C_MAX_DRAWDOWN_PCT * 100)
         return equity, dd
 
+    def _rebase_after_external_cash_flow(self, portfolio_delta: float, tactical_delta: float):
+        """Keep deposits/withdrawals from being counted as strategy PnL."""
+        if abs(portfolio_delta) <= 0.01:
+            return
+        self.state["portfolio_peak"] = max(
+            CASH_EPS,
+            float(self.state.get("portfolio_peak", CASH_EPS)) + portfolio_delta,
+        )
+        self.state["portfolio_daily_start"] = max(
+            CASH_EPS,
+            float(self.state.get("portfolio_daily_start", CASH_EPS)) + portfolio_delta,
+        )
+        for attr in ("initial_capital", "peak_capital", "daily_start_cap"):
+            current = float(getattr(self.tactical_risk, attr))
+            setattr(self.tactical_risk, attr, max(CASH_EPS, current + tactical_delta))
+
+    def _apply_asset_deficit(self, symbol: str, actual: float, locked: float, tolerance: float):
+        """Reconcile an external reduction without changing any trading signal.
+
+        An active OCO identifies the protected tactical quantity through the
+        exchange's locked balance.  A completed/inactive known OCO is charged to
+        the tactical sleeve first.  Otherwise the reduction is shared pro-rata,
+        which is the neutral treatment for an unclassified manual sale.
+        """
+        info = self.symbol_infos[symbol]
+        price = self.binance.get_current_price(symbol)
+        tpos = self.state["tactical_positions"].get(symbol)
+        old_tactical = self._tactical_qty(symbol)
+        old_alpha = self._alpha_qty(symbol)
+        expected = old_tactical + old_alpha
+        order_list_id = tpos.get("order_list_id") if tpos else None
+        oco_active = bool(tpos and self.binance.has_active_oco(symbol, order_list_id))
+
+        if oco_active:
+            # OCO quantity is locked; any remaining free balance belongs to alpha.
+            new_tactical = min(old_tactical, max(0.0, locked), actual)
+            new_alpha = min(old_alpha, max(0.0, actual - new_tactical))
+        elif tpos and order_list_id is not None:
+            # A known OCO disappeared: preserve the existing OCO-fill semantics.
+            missing = max(0.0, expected - actual)
+            new_tactical = max(0.0, old_tactical - missing)
+            new_alpha = min(old_alpha, max(0.0, actual - new_tactical))
+        else:
+            # No execution provenance: de-capitalize both sleeves neutrally.
+            factor = max(0.0, min(1.0, actual / expected)) if expected > 0 else 0.0
+            new_tactical = old_tactical * factor
+            new_alpha = old_alpha * factor
+
+        # Exchange rounding must never leave the virtual state above reality.
+        overflow = max(0.0, new_tactical + new_alpha - actual)
+        if overflow > 0:
+            alpha_cut = min(new_alpha, overflow)
+            new_alpha -= alpha_cut
+            new_tactical = max(0.0, new_tactical - (overflow - alpha_cut))
+
+        tactical_reduction = max(0.0, old_tactical - new_tactical)
+        alpha_reduction = max(0.0, old_alpha - new_alpha)
+
+        if tpos:
+            if new_tactical <= tolerance or new_tactical * price < info["min_notional"]:
+                if oco_active:
+                    self.binance.cancel_oco_order(symbol, order_list_id)
+                self.state["tactical_positions"].pop(symbol, None)
+                new_tactical = 0.0
+            else:
+                tpos["quantity"] = new_tactical
+                if not oco_active:
+                    tpos["order_list_id"] = None
+        if symbol in self.state["alpha_qty"]:
+            self.state["alpha_qty"][symbol] = 0.0 if new_alpha <= tolerance else new_alpha
+
+        logger.warning(
+            "Saldo Spot reduzido e reconciliado | %s | tático -%.10f | alpha -%.10f",
+            symbol,
+            tactical_reduction,
+            alpha_reduction,
+        )
+        return {
+            "tactical_value": tactical_reduction * price,
+            "alpha_value": alpha_reduction * price,
+            "reprotect": bool(tpos and new_tactical > tolerance and not oco_active),
+        }
+
     def _reconcile_exchange_state(self, startup=False):
-        tactical_fill_detected = False
+        reduced_tactical_value = 0.0
+        reduced_alpha_value = 0.0
+        reprotect = []
         for symbol in self.symbols:
             info = self.symbol_infos[symbol]
-            actual = self.binance.get_asset_total(self._base_asset(symbol))
+            balance = self.binance.get_asset_balance(self._base_asset(symbol))
+            actual = balance["total"]
             expected = self._managed_qty(symbol)
             tolerance = max(info["step_size"] * 1.5, 1e-10)
             delta = actual - expected
             if abs(delta) <= tolerance:
                 continue
             if delta > tolerance:
+                if delta * self.binance.get_current_price(symbol) < info["min_notional"]:
+                    logger.info("Saldo não gerenciado abaixo do mínimo ignorado | %s | qty=%.12f", symbol, delta)
+                    continue
                 raise RuntimeError(f"Saldo não gerenciado detectado em {symbol}: +{delta:.12f}")
-
-            missing = -delta
-            tpos = self.state["tactical_positions"].get(symbol)
-            if tpos and missing <= float(tpos["quantity"]) + tolerance:
-                new_qty = max(0.0, float(tpos["quantity"]) - missing)
-                tactical_fill_detected = True
-                if new_qty * self.binance.get_current_price(symbol) < info["min_notional"]:
-                    self.state["tactical_positions"].pop(symbol, None)
-                else:
-                    tpos["quantity"] = new_qty
-                    if not self.binance.has_active_oco(symbol, tpos.get("order_list_id")):
-                        tpos["order_list_id"] = None
-                logger.warning("Reconciliação atribuiu redução à perna tática | %s | missing=%.10f", symbol, missing)
-            else:
-                raise RuntimeError(f"Déficit de ativo incompatível com estado gerenciado em {symbol}: {missing:.12f}")
+            reduction = self._apply_asset_deficit(symbol, actual, balance["locked"], tolerance)
+            reduced_tactical_value += reduction["tactical_value"]
+            reduced_alpha_value += reduction["alpha_value"]
+            if reduction["reprotect"]:
+                reprotect.append(symbol)
 
         actual_cash = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
         virtual_cash = float(self.state["tactical_cash"]) + float(self.state["alpha_cash"])
         cash_delta = actual_cash - virtual_cash
         if abs(cash_delta) > 0.01:
-            if tactical_fill_detected and cash_delta > 0:
-                self.state["tactical_cash"] += cash_delta
-                logger.info("Provento de OCO reconciliado no caixa tático | %.2f", cash_delta)
-            elif cash_delta > 0:
-                self.state["tactical_cash"] += cash_delta * AGGRESSIVE_C_TACTICAL_WEIGHT
-                self.state["alpha_cash"] += cash_delta * AGGRESSIVE_C_ALPHA_WEIGHT
-                logger.warning("Depósito USDT externo alocado 55/45 | %.2f", cash_delta)
+            old_tactical_cash = float(self.state["tactical_cash"])
+            if cash_delta > 0:
+                reduced_value = reduced_tactical_value + reduced_alpha_value
+                tactical_share = (
+                    reduced_tactical_value / reduced_value
+                    if reduced_value > CASH_EPS
+                    else AGGRESSIVE_C_TACTICAL_WEIGHT
+                )
+                tactical_cash_delta = cash_delta * tactical_share
+                self.state["tactical_cash"] += tactical_cash_delta
+                self.state["alpha_cash"] += cash_delta - tactical_cash_delta
+                logger.warning("Entrada externa de USDT reconciliada | %.2f", cash_delta)
             else:
-                raise RuntimeError(f"Retirada/gasto USDT não gerenciado detectado: {cash_delta:.2f}")
+                # Scale both virtual cash sleeves to the real free USDT balance.
+                factor = max(0.0, actual_cash / virtual_cash) if virtual_cash > CASH_EPS else 0.0
+                self.state["tactical_cash"] *= factor
+                self.state["alpha_cash"] *= factor
+                tactical_cash_delta = float(self.state["tactical_cash"]) - old_tactical_cash
+                self._rebase_after_external_cash_flow(cash_delta, tactical_cash_delta)
+                logger.warning("Saída/redução externa de USDT reconciliada | %.2f", cash_delta)
+
+        # A partial/manual reduction must not leave a surviving tactical leg naked.
+        for symbol in reprotect:
+            if not self._protect_tactical(symbol):
+                logger.critical("Reconciliação concluída, mas OCO não pôde ser restaurada | %s", symbol)
 
         self._refresh_protection_status()
         if not startup:
