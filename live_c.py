@@ -37,6 +37,7 @@ logger = logging.getLogger("Krypton.AggressiveC")
 CONTROL_DIR = Path(__file__).resolve().parent
 DECISION_NOW_REQUEST = CONTROL_DIR / ".krypton_decision_now"
 CLEAR_HALT_REQUEST = CONTROL_DIR / ".krypton_clear_halt"
+REBASE_MANUAL_CHANGE_REQUEST = CONTROL_DIR / ".krypton_rebase_manual_change"
 
 
 class LiveAggressiveCTradeBot(AggressiveCTradeBot):
@@ -225,6 +226,45 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
         )
         return True
 
+    def _rebase_after_confirmed_manual_change(self) -> bool:
+        """Create a new risk baseline after an operator-confirmed balance change.
+
+        This is intentionally explicit: it must never clear a genuine drawdown
+        automatically. It reconciles Spot first, preserves positions and orders,
+        records an audit marker, and only then clears the accounting halt.
+        """
+        self._reconcile_exchange_state()
+        now = datetime.now(timezone.utc)
+        equity = self._portfolio_equity()
+        tactical_equity = self._tactical_equity()
+        old_peak = float(self.state.get("portfolio_peak", equity))
+
+        self.state["portfolio_peak"] = equity
+        self.state["portfolio_daily_start"] = equity
+        self.state["portfolio_daily_date"] = now.date().isoformat()
+        self.state["portfolio_halted"] = False
+        self.state["last_manual_balance_rebase"] = {
+            "at": now.isoformat(),
+            "old_peak": old_peak,
+            "new_peak": equity,
+        }
+
+        self.tactical_risk.initial_capital = max(tactical_equity, 1e-6)
+        self.tactical_risk.peak_capital = max(tactical_equity, 1e-6)
+        self.tactical_risk.daily_start_cap = max(tactical_equity, 1e-6)
+        self.tactical_risk.daily_date = now.date()
+        self.tactical_risk.halted = False
+        self.tactical_risk.circuit_breaker = False
+        self._save_state()
+        self._record_snapshot_safe()
+        logger.warning(
+            "Baseline de risco reparada após alteração manual confirmada | peak %.2f -> %.2f %s",
+            old_peak,
+            equity,
+            LIVE_QUOTE_ASSET,
+        )
+        return True
+
     def run(self):
         logger.info(
             "Krypton Aggressive C iniciado | quote=%s | UTC | mode=%s | capital=SPOT_ONLY",
@@ -233,6 +273,12 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
         )
         now = datetime.now(timezone.utc)
         last_daily_run = None
+
+        if self._consume_request(REBASE_MANUAL_CHANGE_REQUEST):
+            try:
+                self._rebase_after_confirmed_manual_change()
+            except Exception:
+                logger.exception("Falha ao reparar baseline após alteração manual")
 
         if self._consume_request(CLEAR_HALT_REQUEST):
             try:
@@ -257,6 +303,12 @@ class LiveAggressiveCTradeBot(AggressiveCTradeBot):
 
         while True:
             now = datetime.now(timezone.utc)
+
+            if self._consume_request(REBASE_MANUAL_CHANGE_REQUEST):
+                try:
+                    self._rebase_after_confirmed_manual_change()
+                except Exception:
+                    logger.exception("Falha ao reparar baseline após alteração manual")
 
             if self._consume_request(CLEAR_HALT_REQUEST):
                 try:

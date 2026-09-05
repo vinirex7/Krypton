@@ -24,6 +24,7 @@ krypton_c_state.db
 krypton_dashboard.db
 krypton_dashboard.db-*
 *.csv
+.krypton_*
 
 # Build / distribuição
 build/
