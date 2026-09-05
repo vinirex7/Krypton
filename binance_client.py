@@ -74,19 +74,21 @@ class BinanceInterface:
             "is_spot_trading_allowed": bool(info.get("isSpotTradingAllowed", False)),
         }
 
-    def get_account_balance(self, asset: str = "USDT") -> float:
+    def get_asset_balance(self, asset: str) -> dict[str, float]:
+        """Return one Spot balance split into free, locked and total amounts."""
         balances = self.client.get_account()["balances"]
         for balance in balances:
             if balance["asset"] == asset:
-                return float(balance["free"])
-        return 0.0
+                free = float(balance["free"])
+                locked = float(balance["locked"])
+                return {"free": free, "locked": locked, "total": free + locked}
+        return {"free": 0.0, "locked": 0.0, "total": 0.0}
+
+    def get_account_balance(self, asset: str = "USDT") -> float:
+        return self.get_asset_balance(asset)["free"]
 
     def get_asset_total(self, asset: str) -> float:
-        balances = self.client.get_account()["balances"]
-        for balance in balances:
-            if balance["asset"] == asset:
-                return float(balance["free"]) + float(balance["locked"])
-        return 0.0
+        return self.get_asset_balance(asset)["total"]
 
     def get_current_price(self, symbol: str) -> float:
         ticker = self.client.get_orderbook_ticker(symbol=symbol)
