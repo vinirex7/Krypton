@@ -90,6 +90,89 @@ class AggressiveCLiveTests(unittest.TestCase):
         self.assertFalse(c.cost_gate(100.0, 0.05))
         self.assertTrue(c.cost_gate(100.0, 1.0))
 
+    @staticmethod
+    def _reconciliation_bot(balances, *, active_oco=False, order_list_id=None):
+        class FakeBinance:
+            def __init__(self):
+                self.balances = balances
+                self.created_oco = []
+                self.active_oco = active_oco
+
+            def get_asset_balance(self, asset):
+                free, locked = self.balances.get(asset, (0.0, 0.0))
+                return {"free": free, "locked": locked, "total": free + locked}
+
+            def get_account_balance(self, asset):
+                return self.get_asset_balance(asset)["free"]
+
+            def get_current_price(self, symbol):
+                return 100.0
+
+            def has_active_oco(self, symbol, oid):
+                return self.active_oco and oid is not None
+
+            def cancel_oco_order(self, symbol, oid):
+                self.active_oco = False
+                return True
+
+            def create_oco_order(self, **kwargs):
+                self.created_oco.append(kwargs)
+                self.active_oco = True
+                return {"orderListId": 999}
+
+        bot = c.AggressiveCTradeBot.__new__(c.AggressiveCTradeBot)
+        bot.symbols = ["BTCUSDT"]
+        bot.symbol_infos = {"BTCUSDT": {"step_size": 0.0001, "min_notional": 10.0}}
+        bot.binance = FakeBinance()
+        bot.state = {
+            "tactical_cash": 550.0,
+            "alpha_cash": 450.0,
+            "tactical_positions": {
+                "BTCUSDT": {
+                    "quantity": 4.0,
+                    "entry_price": 90.0,
+                    "stop_loss": 80.0,
+                    "take_profit": 120.0,
+                    "order_list_id": order_list_id,
+                }
+            },
+            "alpha_qty": {"BTCUSDT": 6.0},
+            "portfolio_peak": 2000.0,
+            "portfolio_daily_start": 2000.0,
+        }
+        bot.tactical_risk = RiskManager(1000.0, risk_per_trade=0.02, max_drawdown_pct=0.30)
+        bot.protection_blocked = False
+        bot._save_state = lambda: None
+        return bot
+
+    def test_manual_alpha_sale_with_active_oco_is_reconciled(self):
+        bot = self._reconciliation_bot({"BTC": (3.0, 4.0), "USDT": (1300.0, 0.0)}, active_oco=True, order_list_id=123)
+        bot._reconcile_exchange_state()
+        self.assertAlmostEqual(bot._tactical_qty("BTCUSDT"), 4.0)
+        self.assertAlmostEqual(bot._alpha_qty("BTCUSDT"), 3.0)
+        self.assertAlmostEqual(bot.state["tactical_cash"], 550.0)
+        self.assertAlmostEqual(bot.state["alpha_cash"], 750.0)
+        self.assertFalse(bot.protection_blocked)
+
+    def test_unclassified_manual_sale_reduces_both_sleeves_pro_rata(self):
+        bot = self._reconciliation_bot({"BTC": (5.0, 0.0), "USDT": (1500.0, 0.0)})
+        bot._reconcile_exchange_state()
+        self.assertAlmostEqual(bot._tactical_qty("BTCUSDT"), 2.0)
+        self.assertAlmostEqual(bot._alpha_qty("BTCUSDT"), 3.0)
+        self.assertAlmostEqual(bot.state["tactical_cash"], 750.0)
+        self.assertAlmostEqual(bot.state["alpha_cash"], 750.0)
+        self.assertEqual(len(bot.binance.created_oco), 1)
+        self.assertFalse(bot.protection_blocked)
+
+    def test_manual_usdt_reduction_scales_cash_and_rebases_risk(self):
+        bot = self._reconciliation_bot({"BTC": (6.0, 4.0), "USDT": (400.0, 0.0)}, active_oco=True, order_list_id=123)
+        bot._reconcile_exchange_state()
+        self.assertAlmostEqual(bot.state["tactical_cash"], 220.0)
+        self.assertAlmostEqual(bot.state["alpha_cash"], 180.0)
+        self.assertAlmostEqual(bot.state["portfolio_peak"], 1400.0)
+        self.assertAlmostEqual(bot.tactical_risk.peak_capital, 670.0)
+        self.assertFalse(bot.state.get("portfolio_halted", False))
+
 
 if __name__ == "__main__":
     unittest.main()
