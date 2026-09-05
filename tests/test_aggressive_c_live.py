@@ -105,6 +105,9 @@ class AggressiveCLiveTests(unittest.TestCase):
             def get_account_balance(self, asset):
                 return self.get_asset_balance(asset)["free"]
 
+            def get_asset_total(self, asset):
+                return self.get_asset_balance(asset)["total"]
+
             def get_current_price(self, symbol):
                 return 100.0
 
@@ -171,6 +174,20 @@ class AggressiveCLiveTests(unittest.TestCase):
         self.assertAlmostEqual(bot.state["alpha_cash"], 180.0)
         self.assertAlmostEqual(bot.state["portfolio_peak"], 1400.0)
         self.assertAlmostEqual(bot.tactical_risk.peak_capital, 670.0)
+        self.assertFalse(bot.state.get("portfolio_halted", False))
+
+    def test_simultaneous_crypto_and_usdt_reduction_is_not_drawdown(self):
+        bot = self._reconciliation_bot({"BTC": (5.0, 0.0), "USDT": (400.0, 0.0)})
+        bot._reconcile_exchange_state()
+
+        self.assertAlmostEqual(bot._tactical_qty("BTCUSDT"), 2.0)
+        self.assertAlmostEqual(bot._alpha_qty("BTCUSDT"), 3.0)
+        self.assertAlmostEqual(bot.state["tactical_cash"], 220.0)
+        self.assertAlmostEqual(bot.state["alpha_cash"], 180.0)
+        self.assertAlmostEqual(bot.state["portfolio_peak"], 900.0)
+        equity, dd = bot._portfolio_risk_update()
+        self.assertAlmostEqual(equity, 900.0)
+        self.assertAlmostEqual(dd, 0.0)
         self.assertFalse(bot.state.get("portfolio_halted", False))
 
 

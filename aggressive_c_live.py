@@ -469,8 +469,8 @@ class AggressiveCTradeBot:
         actual_cash = self.binance.get_account_balance(LIVE_QUOTE_ASSET)
         virtual_cash = float(self.state["tactical_cash"]) + float(self.state["alpha_cash"])
         cash_delta = actual_cash - virtual_cash
+        old_tactical_cash = float(self.state["tactical_cash"])
         if abs(cash_delta) > 0.01:
-            old_tactical_cash = float(self.state["tactical_cash"])
             if cash_delta > 0:
                 reduced_value = reduced_tactical_value + reduced_alpha_value
                 tactical_share = (
@@ -487,9 +487,25 @@ class AggressiveCTradeBot:
                 factor = max(0.0, actual_cash / virtual_cash) if virtual_cash > CASH_EPS else 0.0
                 self.state["tactical_cash"] *= factor
                 self.state["alpha_cash"] *= factor
-                tactical_cash_delta = float(self.state["tactical_cash"]) - old_tactical_cash
-                self._rebase_after_external_cash_flow(cash_delta, tactical_cash_delta)
                 logger.warning("Saída/redução externa de USDT reconciliada | %.2f", cash_delta)
+
+        # Rebase risk by the *net* external capital flow, not by USDT alone.
+        # A manual sale inside Spot has cash_delta ~= removed_asset_value and is
+        # therefore neutral. A withdrawal/removal has a negative net flow and
+        # must reduce the high-water marks so it is not reported as strategy DD.
+        # This also covers simultaneous crypto and USDT reductions.
+        reduced_asset_value = reduced_tactical_value + reduced_alpha_value
+        tactical_cash_delta = float(self.state["tactical_cash"]) - old_tactical_cash
+        net_external_flow = cash_delta - reduced_asset_value
+        tactical_external_flow = tactical_cash_delta - reduced_tactical_value
+        if abs(net_external_flow) > 0.01:
+            self._rebase_after_external_cash_flow(net_external_flow, tactical_external_flow)
+            logger.warning(
+                "Fluxo externo líquido reconciliado | total=%+.2f | tático=%+.2f | ativos_reduzidos=%.2f",
+                net_external_flow,
+                tactical_external_flow,
+                reduced_asset_value,
+            )
 
         # A partial/manual reduction must not leave a surviving tactical leg naked.
         for symbol in reprotect:
