@@ -38,6 +38,8 @@ Tradebot spot para Binance com **Supertrend + RSI + MACD**, sizing por ATR, filt
 - Estado de peak equity, drawdown halt e circuit breaker é persistido no SQLite.
 - Falta da OCO específica da posição bloqueia novas entradas.
 - Saldos manuais não são adotados como posições do bot por padrão.
+- Vendas, retiradas ou reduções simultâneas de cripto e USDT são reconciliadas
+  pelo fluxo externo líquido, sem transformar retirada de capital em drawdown.
 - O ciclo diário é calculado explicitamente em **UTC**, sem depender do timezone local do VPS ou do `schedule`.
 - `datetime.now(timezone.utc)` substitui `datetime.utcnow()`.
 - Um boot fora da janela das 00:05–00:09 UTC não envia entrada atrasada no meio do candle.
@@ -106,6 +108,17 @@ pip install -r requirements.txt
 cp .env.example .env
 python tradebot.py
 ```
+
+Se uma versão anterior já salvou um halt falso após uma alteração manual de
+saldo confirmada, solicite uma única reparação da baseline e então inicie o bot:
+
+```bash
+python tradebot.py --rebase-after-manual-change
+python tradebot.py
+```
+
+O comando preserva posições, ordens e o banco; ele apenas redefine as bases de
+risco para o patrimônio Spot já reconciliado. Não use para apagar drawdown real.
 
 `USE_TESTNET = True` continua como padrão. Só altere para produção depois de validar a execução, fills, OCO, reconciliação e comportamento do risco em testnet.
 
