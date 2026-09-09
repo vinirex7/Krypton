@@ -111,6 +111,12 @@ class BinanceInterface:
         precision = self._step_precision(tick)
         return round(round(price / tick) * tick, precision)
 
+    def _format_quantity(self, quantity: float, step: float) -> str:
+        """Return a Binance-safe fixed-point quantity aligned to LOT_SIZE."""
+        qty = self._round_step(quantity, step)
+        precision = self._step_precision(step)
+        return f"{qty:.{precision}f}"
+
     def place_limit_order(self, symbol: str, side: str, quantity: float, price: float, symbol_info: dict, reference_price: float | None = None) -> dict | None:
         """Envia LIMIT e valida slippage contra o preço do sinal, não contra um mid recém-buscado."""
         side = side.upper()
@@ -123,7 +129,8 @@ class BinanceInterface:
                 )
                 return None
 
-        qty = self._round_step(quantity, symbol_info["step_size"])
+        qty_text = self._format_quantity(quantity, symbol_info["step_size"])
+        qty = float(qty_text)
         rounded_price = self._round_tick(price, symbol_info["tick_size"])
         notional = qty * rounded_price
         if qty <= 0 or notional < symbol_info["min_notional"]:
@@ -136,7 +143,7 @@ class BinanceInterface:
                 side=side,
                 type=Client.ORDER_TYPE_LIMIT,
                 timeInForce=Client.TIME_IN_FORCE_GTC,
-                quantity=qty,
+                quantity=qty_text,
                 price=f"{rounded_price:.8f}",
             )
             logger.info("LIMIT aceita pela Binance | %s | order=%s", symbol, order["orderId"])
@@ -195,7 +202,8 @@ class BinanceInterface:
         return any(int(o.get("orderListId", -1)) == int(order_list_id) for o in self.get_open_orders(symbol))
 
     def place_market_order(self, symbol: str, side: str, quantity: float, symbol_info: dict) -> dict | None:
-        qty = self._round_step(quantity, symbol_info["step_size"])
+        qty_text = self._format_quantity(quantity, symbol_info["step_size"])
+        qty = float(qty_text)
         if qty <= 0:
             return None
         try:
@@ -203,7 +211,7 @@ class BinanceInterface:
                 symbol=symbol,
                 side=side.upper(),
                 type=Client.ORDER_TYPE_MARKET,
-                quantity=qty,
+                quantity=qty_text,
             )
         except BinanceAPIException as exc:
             logger.error("Erro ao enviar MARKET %s %s: %s", side, symbol, exc)
@@ -211,14 +219,15 @@ class BinanceInterface:
 
     def create_oco_order(self, symbol: str, quantity: float, take_profit_price: float, stop_price: float, symbol_info: dict) -> dict | None:
         """Cria OCO SELL real para proteger uma posição LONG spot."""
-        qty = self._round_step(quantity, symbol_info["step_size"])
+        qty_text = self._format_quantity(quantity, symbol_info["step_size"])
+        qty = float(qty_text)
         tp = self._round_tick(take_profit_price, symbol_info["tick_size"])
         stop = self._round_tick(stop_price, symbol_info["tick_size"])
         try:
             order = self.client.create_oco_order(
                 symbol=symbol,
                 side=Client.SIDE_SELL,
-                quantity=qty,
+                quantity=qty_text,
                 price=f"{tp:.8f}",
                 stopPrice=f"{stop:.8f}",
             )
