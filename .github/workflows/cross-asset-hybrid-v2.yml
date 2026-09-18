@@ -1,0 +1,42 @@
+name: Krypton Cross-Asset Hybrid V2 Research
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_allocation.py'
+      - 'cross_asset_hybrid_v2.py'
+      - 'cross_asset_hybrid_v2_validation.py'
+      - '.github/workflows/cross-asset-hybrid-v2.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_hybrid_v2:
+    if: github.event_name == 'workflow_dispatch' || github.base_ref == 'research/adaptive-portfolio-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile v2 modules
+        run: python -m py_compile cross_asset_allocation.py cross_asset_hybrid_v2.py cross_asset_hybrid_v2_validation.py
+      - name: Run cross-asset hybrid v2 validation
+        run: >-
+          python cross_asset_hybrid_v2_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload hybrid v2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-hybrid-v2-results
+          path: |
+            cross_asset_hybrid_v2_report.json
+            cross_asset_hybrid_v2_full_results.csv
+            cross_asset_hybrid_v2_period_results.csv
+            cross_asset_hybrid_v2_equity_curves.csv
+            cross_asset_hybrid_v2_rebalances.csv
+          if-no-files-found: error

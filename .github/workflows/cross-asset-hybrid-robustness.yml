@@ -1,0 +1,45 @@
+name: Krypton Cross-Asset Hybrid Robustness
+
+on:
+  pull_request:
+    paths:
+      - 'cross_asset_hybrid_robustness.py'
+      - 'cross_asset_hybrid_v2.py'
+      - 'cross_asset_allocation.py'
+      - '.github/workflows/cross-asset-hybrid-robustness.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile robustness modules
+        run: >-
+          python -m py_compile
+          cross_asset_allocation.py
+          cross_asset_hybrid_v2.py
+          cross_asset_hybrid_robustness.py
+      - name: Run cadence robustness validation
+        run: >-
+          python cross_asset_hybrid_robustness.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload robustness results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-cross-asset-hybrid-robustness
+          path: |
+            cross_asset_hybrid_robustness_report.json
+            cross_asset_hybrid_robustness_full.csv
+            cross_asset_hybrid_robustness_periods.csv
+            cross_asset_hybrid_robustness_curves.csv
+            cross_asset_hybrid_robustness_rebalances.csv
+          if-no-files-found: error
