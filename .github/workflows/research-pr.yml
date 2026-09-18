@@ -11,6 +11,9 @@ on:
       - 'cross_asset_ci.py'
       - 'entry_state_diagnostics.py'
       - 'entry_state_ci.py'
+      - 'adaptive_*.py'
+      - 'range_grid.py'
+      - 'requirements-research.txt'
       - 'selection_pipeline.py'
       - 'execution_audit.py'
       - 'config_search.py'
@@ -18,6 +21,7 @@ on:
       - '.github/workflows/research-pr.yml'
   workflow_dispatch:
 
+# Isolated core-v2 validation trigger. Research only; live behavior is unchanged.
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -35,6 +39,8 @@ jobs:
           selection_pipeline.py regime_diagnostics.py forensic_diagnostics.py forensic_ci.py
           cross_asset_diagnostics.py cross_asset_ci.py
           entry_state_diagnostics.py entry_state_ci.py config_search.py
+          adaptive_portfolio.py adaptive_ml.py adaptive_validation.py range_grid.py
+          adaptive_core_v2.py adaptive_core_v2_validation.py
       - name: Run deterministic tests
         run: python -m unittest discover -s tests -v
 
@@ -63,4 +69,63 @@ jobs:
             entry_state_focus_monthly.csv
             entry_state_period_summary.csv
             entry_state_report.json
+          if-no-files-found: error
+
+  adaptive_portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies
+        run: pip install -r requirements-research.txt
+      - name: Run seven-stage adaptive portfolio research
+        run: >-
+          python adaptive_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload adaptive research results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-adaptive-portfolio-results
+          path: |
+            adaptive_report.json
+            adaptive_full_results.csv
+            adaptive_period_results.csv
+            adaptive_equity_curves.csv
+            adaptive_baseline_trades.csv
+            adaptive_runner_trades.csv
+            adaptive_grid_fills.csv
+            adaptive_xgb_folds.csv
+          if-no-files-found: error
+
+  adaptive_core_v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run slope-confirmed BTC core validation
+        run: >-
+          python adaptive_core_v2_validation.py
+          --start 2020-08-01
+          --end 2026-08-25
+          --mc-runs 5000
+      - name: Upload core v2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-adaptive-core-v2-results
+          path: |
+            adaptive_core_v2_report.json
+            adaptive_core_v2_full_results.csv
+            adaptive_core_v2_period_results.csv
+            adaptive_core_v2_equity_curves.csv
+            adaptive_core_v2_trades.csv
           if-no-files-found: error
