@@ -1,0 +1,25 @@
+{
+  "retrieved_at": "2026-10-28T23:15:18.533665+00:00",
+  "symbols": {
+    "SOLUSDT": {
+      "step_size": 0.001,
+      "tick_size": 0.01,
+      "min_notional": 5.0
+    },
+    "BTCUSDT": {
+      "step_size": 1e-05,
+      "tick_size": 0.01,
+      "min_notional": 5.0
+    },
+    "BNBUSDT": {
+      "step_size": 0.001,
+      "tick_size": 0.01,
+      "min_notional": 5.0
+    },
+    "ETHUSDT": {
+      "step_size": 0.0001,
+      "tick_size": 0.01,
+      "min_notional": 5.0
+    }
+  }
+}

@@ -343,6 +343,12 @@ def run_backtest(symbol: str, start: str, end: str | None = None) -> dict:
 
 
 if __name__ == "__main__":
+    import sys
+    if "--legacy" not in sys.argv:
+        from live_validation import main as live_main
+        live_main(mode="backtest")
+        raise SystemExit(0)
+    sys.argv.remove("--legacy")
     parser = argparse.ArgumentParser(description="Krypton TradeBot — Backtest Spot (USDT)")
     parser.add_argument("--symbol", default="SOLUSDT", choices=["SOLUSDT", "BTCUSDT", "BNBUSDT"])
     parser.add_argument("--start", default="2022-01-01")

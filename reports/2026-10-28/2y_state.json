@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "strategy_fingerprint": "4318a98c601fa1e7ec251e242939af1a8ed85d86035a812039ecb3cc9dbcca1a",
+  "initialized_at": "2024-10-28 00:00:00+00:00",
+  "tactical_cash": 6597.878014711126,
+  "alpha_cash": 5398.263830218192,
+  "tactical_positions": {},
+  "alpha_qty": {
+    "BTCUSDT": 0.0,
+    "ETHUSDT": 0.0,
+    "SOLUSDT": 0.0,
+    "BNBUSDT": 0.0
+  },
+  "last_alpha_rebalance": "2026-10-25",
+  "last_sleeve_rebalance": "2026-10-18",
+  "portfolio_peak": 12422.700113576893,
+  "portfolio_daily_start": 11998.630970529319,
+  "portfolio_daily_date": "2026-10-27",
+  "portfolio_halted": true,
+  "tactical_risk_state": {
+    "initial_capital": 5354.083064840873,
+    "peak_capital": 6637.424486979894,
+    "daily_start_cap": 6597.878014711126,
+    "daily_date": "2026-10-27",
+    "halted": false,
+    "circuit_breaker": false,
+    "risk_per_trade": 0.02,
+    "max_drawdown_pct": 0.3,
+    "circuit_breaker_pct": 0.04
+  }
+}

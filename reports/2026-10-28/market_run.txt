@@ -1,0 +1,145 @@
+/workspace/scratch/138ed3f12991/Krypton/live_validation.py:19: DeprecationWarning: 
+Pyarrow will become a required dependency of pandas in the next major release of pandas (pandas 3.0),
+(to allow more performant data types, such as the Arrow string type, and better interoperability with other libraries)
+but was not found to be installed on your system.
+If this would cause problems for you,
+please provide us feedback at https://github.com/pandas-dev/pandas/issues/54466
+        
+  import pandas as pd
+Data verified: SOLUSDT: 1861 candles
+Data verified: BTCUSDT: 1861 candles
+Data verified: BNBUSDT: 1861 candles
+Data verified: ETHUSDT: 1861 candles
+Replay 2025-12-28: 2025-12-28 equity=10000.00
+Replay 2025-12-28: 2026-03-28 equity=10000.00
+Replay 2025-12-28: 2026-06-26 equity=10000.00
+Replay 2025-12-28: 2026-09-24 equity=10738.87
+{
+  "period": "10m",
+  "start": "2025-12-28",
+  "end": "2026-10-27",
+  "return": 0.01040649503695823,
+  "cagr": 0.012516270005938468,
+  "max_drawdown": -0.0785053374749527,
+  "sharpe": 0.19180436638466852,
+  "final_capital": 10104.064950369582,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 39,
+  "fees": 54.43662669756715,
+  "wf_folds": 4,
+  "wf_positive_folds": 1,
+  "wf_compounded_return": 0.01040649503695823
+}
+Replay 2024-10-28: 2024-10-28 equity=10140.08
+Replay 2024-10-28: 2025-01-26 equity=11999.54
+Replay 2024-10-28: 2025-04-26 equity=11998.60
+Replay 2024-10-28: 2025-07-25 equity=11999.26
+Replay 2024-10-28: 2025-10-23 equity=11999.88
+Replay 2024-10-28: 2026-01-21 equity=11999.06
+Replay 2024-10-28: 2026-04-21 equity=11998.34
+Replay 2024-10-28: 2026-07-20 equity=11998.09
+Replay 2024-10-28: 2026-10-18 equity=11998.62
+{
+  "period": "2y",
+  "start": "2024-10-28",
+  "end": "2026-10-27",
+  "return": 0.19986435226293153,
+  "cagr": 0.095451553058439,
+  "max_drawdown": -0.0543531777555083,
+  "sharpe": 1.0147180081961296,
+  "final_capital": 11998.643522629316,
+  "runtime_error_count": 28,
+  "first_runtime_error": {
+    "time": "2024-12-08 00:00:00+00:00",
+    "phase": "runtime_reconciliation",
+    "error": "Saldo n\u00e3o gerenciado detectado em BTCUSDT: +0.000050000000"
+  },
+  "halt_date": "2024-12-08",
+  "orders_count": 49,
+  "fees": 62.6368149542836,
+  "wf_folds": 9,
+  "wf_positive_folds": 5,
+  "wf_compounded_return": 0.19986435226293175
+}
+Replay 2023-10-28: 2023-10-28 equity=9998.35
+Replay 2023-10-28: 2024-01-26 equity=12814.25
+Replay 2023-10-28: 2024-04-25 equity=17583.67
+Replay 2023-10-28: 2024-07-24 equity=17812.90
+Replay 2023-10-28: 2024-10-22 equity=15030.05
+Replay 2023-10-28: 2025-01-20 equity=15034.01
+Replay 2023-10-28: 2025-04-20 equity=15031.31
+Replay 2023-10-28: 2025-07-19 equity=15035.39
+Replay 2023-10-28: 2025-10-17 equity=15037.54
+Replay 2023-10-28: 2026-01-15 equity=15035.22
+Replay 2023-10-28: 2026-04-15 equity=15030.49
+Replay 2023-10-28: 2026-07-14 equity=15029.30
+Replay 2023-10-28: 2026-10-12 equity=15032.15
+{
+  "period": "3y",
+  "start": "2023-10-28",
+  "end": "2026-10-27",
+  "return": 0.5032158468020449,
+  "cagr": 0.14549620702245658,
+  "max_drawdown": -0.20330910695730475,
+  "sharpe": 0.9426847929993052,
+  "final_capital": 15032.158468020449,
+  "runtime_error_count": 1499,
+  "first_runtime_error": {
+    "time": "2024-10-05 00:00:00+00:00",
+    "phase": "runtime_reconciliation",
+    "error": "Saldo n\u00e3o gerenciado detectado em BNBUSDT: +0.009000000000"
+  },
+  "halt_date": "2024-10-05",
+  "orders_count": 124,
+  "fees": 177.61263607889936,
+  "wf_folds": 13,
+  "wf_positive_folds": 7,
+  "wf_compounded_return": 0.5032158468020451
+}
+Replay 2022-10-28: 2022-10-28 equity=10000.00
+Replay 2022-10-28: 2023-01-26 equity=10140.96
+Replay 2022-10-28: 2023-04-26 equity=9937.04
+Replay 2022-10-28: 2023-07-25 equity=10234.57
+Replay 2022-10-28: 2023-10-23 equity=10374.07
+Replay 2022-10-28: 2024-01-21 equity=13538.43
+2026-10-28 18:22:00,998 [CRITICAL] Krypton.AggressiveC — Perna tática sem OCO | BTCUSDT
+2026-10-28 18:22:00,999 [CRITICAL] Krypton.AggressiveC — Reconciliação concluída, mas OCO não pôde ser restaurada | BTCUSDT
+2026-10-28 18:22:00,999 [CRITICAL] Krypton.AggressiveC — Perna tática sem OCO | BTCUSDT
+2026-10-28 18:22:00,999 [CRITICAL] Krypton.AggressiveC — Não foi possível restaurar OCO tática | BTCUSDT
+2026-10-28 18:22:00,999 [CRITICAL] Krypton.AggressiveC — Perna tática sem OCO | BTCUSDT
+2026-10-28 18:22:00,999 [CRITICAL] Krypton.AggressiveC — Não foi possível restaurar OCO tática | BTCUSDT
+Replay 2022-10-28: 2024-04-20 equity=16759.32
+Replay 2022-10-28: 2024-07-19 equity=16642.65
+Replay 2022-10-28: 2024-10-17 equity=16642.62
+Replay 2022-10-28: 2025-01-15 equity=16646.12
+Replay 2022-10-28: 2025-04-15 equity=16643.94
+Replay 2022-10-28: 2025-07-14 equity=16647.59
+Replay 2022-10-28: 2025-10-12 equity=16648.56
+Replay 2022-10-28: 2026-01-10 equity=16645.26
+Replay 2022-10-28: 2026-04-10 equity=16642.82
+Replay 2022-10-28: 2026-07-09 equity=16641.84
+Replay 2022-10-28: 2026-10-07 equity=16644.24
+{
+  "period": "4y",
+  "start": "2022-10-28",
+  "end": "2026-10-27",
+  "return": 0.6643897017210227,
+  "cagr": 0.1358310977439321,
+  "max_drawdown": -0.11764117777453442,
+  "sharpe": 1.009871176740498,
+  "final_capital": 16643.897017210227,
+  "runtime_error_count": 1682,
+  "first_runtime_error": {
+    "time": "2024-04-08 00:00:00+00:00",
+    "phase": "runtime_reconciliation",
+    "error": "Saldo n\u00e3o gerenciado detectado em BTCUSDT: +0.000070000000"
+  },
+  "halt_date": "2024-04-08",
+  "orders_count": 148,
+  "fees": 190.61657455566592,
+  "wf_folds": 17,
+  "wf_positive_folds": 9,
+  "wf_compounded_return": 0.6643897017210223
+}
