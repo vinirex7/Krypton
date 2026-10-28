@@ -513,4 +513,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--legacy" in sys.argv:
+        sys.argv.remove("--legacy")
+        main()
+    else:
+        from live_validation import main as live_main
+        live_main(mode="walk-forward")

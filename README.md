@@ -1,147 +1,137 @@
-# 🔷 Krypton TradeBot
+# Krypton TradeBot — Aggressive C
 
-Tradebot spot para Binance com **Supertrend + RSI + MACD**, sizing por ATR, filtro de regime BTC/SMA200 e controles de risco persistentes. Live e pesquisa compartilham a mesma arquitetura congelada.
+A implementação live atual está em `main`. O entrypoint canônico é
+`tradebot.py`, que inicia `LiveAggressiveCTradeBot` (`live_c.py`) e utiliza o
+motor de decisões de `aggressive_c_live.py`. O repositório inicia em TESTNET;
+`USE_TESTNET=false` no ambiente é necessário para produção. O repositório não
+informa qual commit está efetivamente instalado em um VPS.
 
-## Moedas de cotação
+## Configuração live atual
 
-- **Backtest e live:** `USDT` (`SOLUSDT`, `BTCUSDT`, `BNBUSDT`).
-- Proxies USD/Yahoo não são usados por padrão e nunca são rotulados como USDT.
+| Regra | Valor |
+|---|---|
+| Mercado | Binance Spot USDT, somente comprado, sem margem |
+| Sleeve tático | 55% do patrimônio |
+| Pares/pesos dentro do tático | SOL 31,25%; BTC 50%; BNB 18,75% |
+| Risco por entrada tática | 2% da equity tática, limitado por peso e caixa |
+| Sinais | Supertrend 7/3, RSI 14 (40–70), MACD 12/26/9 |
+| Stop / take profit | 2× / 3× ATR |
+| Regime tático | BTC acima da SMA200; gates de continuidade e custo |
+| Sleeve alpha | 45%; BTC, ETH, SOL e BNB |
+| Seleção alpha | SMA200 própria, momentum 30/90/180 dias, top 2, mínimo 2 |
+| Sizing alpha | Inverso da volatilidade/covariância; alvo 30% a.a.; sem alavancagem |
+| Rebalanceamento alpha / sleeves | 45 / 90 dias |
+| Halt de drawdown | 30% global e tático; persistente |
+| Circuit breaker tático | 4% diário |
+| Execução | Ciclo 00:05 UTC; candles fechados; LIMIT e OCO tática |
 
-## Correções de backtest
+O risco de 2% é sobre o sleeve tático, não sobre o patrimônio inteiro.
+`AGGRESSIVE_C_TRANSFER_COST_ASSUMPTION=0.003` é um marcador de pesquisa;
+o live Spot atual não debita uma tarifa fictícia de transferência entre sleeves.
 
-1. SL/TP usam **LOW/HIGH** do candle; se ambos forem tocados, **SL tem prioridade**.
-2. Sinal do CLOSE de `i` só entra no **OPEN de `i+1`** — sem look-ahead.
-3. Backtest é **spot LONG-only**; sinal SHORT nunca vira posição short.
-4. Sizing arrisca **1% da equity**, limitado pelo peso do ativo e pelo caixa livre no portfólio.
-5. Os pares e pesos do walk-forward são os mesmos do live, com quote `USDT`; ETH foi removido da arquitetura validada.
-6. `STOP_LOSS_ATR_MULT`, `TAKE_PROFIT_ATR_MULT`, `CIRCUIT_BREAKER_PCT`, `MAX_DRAWDOWN_PCT` e `MAX_SIMULTANEOUS_POS` vêm do config.
-7. ATR é calculado uma única vez sobre o dataset completo com warm-up de 300 dias.
-8. Existe cap explícito de notional por peso e caixa livre para impedir alavancagem implícita no spot.
-9. Supertrend não propaga `direction=0` após o warm-up.
-10. Saídas por sinal acontecem no open antes de SL/TP intradiários; gaps e slippage adverso são modelados.
-11. Equity, Sharpe, drawdown e circuit breaker usam marcação a mercado diária.
-12. Monte Carlo usa block bootstrap dos retornos diários da carteira, não retorno integral de cada posição.
-
-## Correções de execução live
-
-- Uma LIMIT aceita pela Binance **não é registrada como posição até `FILLED`**.
-- O sinal diário usa somente candles cujo `close_time` já passou; o candle aberto das 00:05 UTC é descartado.
-- Timeout cancela a ordem e reconcilia `get_order`/`get_open_orders`, inclusive fills parciais.
-- Entradas preenchidas recebem **OCO real na Binance** para SL/TP.
-- A perna de stop da OCO é `STOP_LOSS` a mercado, evitando uma ordem stop-limit presa após um gap.
-- O estado das posições é persistido em `krypton_state.db` e reconciliado com o saldo real no boot.
-- Se o VPS reiniciar, o bot tenta restaurar a proteção OCO das posições existentes.
-- `NOTIONAL` e `MIN_NOTIONAL` são aceitos ao ler os filtros do símbolo.
-- A validação de slippage compara o preço da ordem com o **preço do sinal**, não com um mid recém-consultado.
-- Não há shorts: o live opera somente spot.
-- Novas entradas exigem BTC acima da SMA200; saídas continuam permitidas em risk-off.
-- Estado de peak equity, drawdown halt e circuit breaker é persistido no SQLite.
-- Falta da OCO específica da posição bloqueia novas entradas.
-- Saldos manuais não são adotados como posições do bot por padrão.
-- Vendas, retiradas ou reduções simultâneas de cripto e USDT são reconciliadas
-  pelo fluxo externo líquido, sem transformar retirada de capital em drawdown.
-- O ciclo diário é calculado explicitamente em **UTC**, sem depender do timezone local do VPS ou do `schedule`.
-- `datetime.now(timezone.utc)` substitui `datetime.utcnow()`.
-- Um boot fora da janela das 00:05–00:09 UTC não envia entrada atrasada no meio do candle.
-
-## Gestão de risco
-
-| Parâmetro | Valor |
-|---|---:|
-| Risco por trade | 1% do capital total |
-| Stop Loss | 2× ATR |
-| Take Profit | 3× ATR |
-| R:R | 1,5:1 |
-| Filtro de regime | BTC > SMA200 |
-| Circuit breaker | -4% no dia |
-| Max drawdown | -20% |
-| Máx. posições | 3 |
-| Ordem | LIMIT + OCO |
-
-O TP live está congelado em **3× ATR**, conforme a arquitetura levada ao holdout final. Qualquer alteração exige um novo processo de seleção pré-holdout e validação OOS.
-
-## Uso
-
-### Backtest
+## Backtest e validação temporal do live
 
 ```bash
-python backtest.py --symbol SOLUSDT --start 2022-01-01 --end 2026-06-01
-python backtest.py --symbol BTCUSDT --start 2022-01-01
-python backtest.py --symbol BNBUSDT --start 2022-01-01
-python walk_forward.py --start 2022-01-01
-python deep_validation.py --start 2022-01-01
-```
-
-### Diagnóstico profundo
-
-`deep_validation.py` mantém a seleção de TP restrita ao período anterior a cada holdout e também gera:
-
-- auditoria de cobertura, datas ausentes, duplicatas, `NaN` e OHLC inválido por ativo;
-- funil diário de sinais com o motivo exato de cada bloqueio;
-- `diagnostics_2026.csv` para investigar períodos sem operações;
-- atribuição de PnL por ativo, ano, holdout e motivo de saída;
-- stress com 0, 5, 10, 20 e 50 bps adicionais de slippage por lado;
-- estabilidade diagnóstica para TP entre 2,5 e 5,0 ATR, sem usar o holdout para selecionar o TP;
-- curva OOS cronológica, incluindo retorno zero nos intervalos entre holdouts.
-
-Execução completa, salvando o relatório de terminal:
-
-```bash
-python deep_validation.py --start 2022-01-01 --diagnostics-year 2026 \
-  --stress-bps 0 5 10 20 50 --tp-grid 2.5 3.0 3.5 4.0 4.5 5.0 \
-  2>&1 | tee deep_validation_resultado.txt
-```
-
-Arquivos centrais: `deep_validation_data_audit.csv`, `deep_validation_signal_funnel.csv`,
-`deep_validation_signal_diagnostics.csv`, `diagnostics_2026.csv`,
-`deep_validation_attribution.csv`, `deep_validation_cost_stress.csv`,
-`deep_validation_tp_stability.csv` e `deep_validation_continuous_oos.csv`.
-
-Por integridade, falta de acesso ao mercado Binance USDT encerra a pesquisa com erro; o sistema não troca silenciosamente para USD/Yahoo. No GitHub Actions, os testes determinísticos rodam a cada push e a pesquisa de mercado é iniciada manualmente (`workflow_dispatch`) em um ambiente com acesso à Binance.
-
-### Live/testnet
-
-```bash
-python -m venv venv
-source venv/bin/activate
 pip install -r requirements.txt
+python live_validation.py --as-of 2026-10-28 --periods 10m 2y 3y 4y --output results/2026-10-28
+```
+
+`--as-of` é o fim exclusivo em UTC. O comando acima inclui até 27/10/2026,
+começando respectivamente em 28/12/2025, 28/10/2024, 28/10/2023 e 28/10/2022.
+Somente dias UTC completos são aceitos. As quatro moedas têm cobertura diária
+integral verificada, mais 400 dias de histórico anterior. Não há fallback para
+outro mercado ou proxy USD.
+
+Os entrypoints anteriores agora usam o replay Aggressive C por padrão:
+
+```bash
+python backtest.py --start 2024-10-28 --end 2026-10-27 --output results/backtest
+python walk_forward.py --start 2024-10-28 --end 2026-10-27 --output results/walk-forward
+```
+
+O replay chama o método `AggressiveCTradeBot.daily_cycle` e os mesmos métodos de
+sizing, execução e reconciliação do runtime atual. Somente bolsa, relógio,
+persistência e telemetria são substituídos. Nenhuma chave, conta Binance ou
+ordem real é utilizada. O histórico de cada decisão reproduz a consulta live:
+limite 400 com o candle atual aberto, restando 399 candles fechados. Indicadores
+não são calculados cumulativamente sobre vários anos quando o live os reinicia
+nessa janela móvel.
+
+A validação walk-forward mantém a configuração live fixa e o estado da carteira
+entre janelas contíguas de 90 dias, incluindo a janela final parcial. Há 365 dias
+de histórico causal anterior a cada janela, sem treinamento de parâmetros ou
+seleção de TP. O produto dos retornos das janelas coincide, por construção e
+verificação, com o replay contínuo. Isso mede estabilidade temporal da mesma
+estratégia; não é um segundo retorno independente nem uma validação intocada:
+a configuração foi promovida em agosto/2026, depois de observar parte dos
+períodos históricos avaliados.
+
+Arquivos de saída: `summary.json`, `summary.csv`, `manifest.json`, curvas,
+ordens executadas, rejeições, exceções do runtime, estado final e folds de cada
+período. O manifesto registra configuração/fingerprint, hashes dos dados,
+filtros de lote e todas as hipóteses. O patrimônio final é marcado a mercado,
+sem venda forçada na última data.
+
+### Limites de execução e problemas reproduzidos
+
+O preço de 00:05 é aproximado pelo OPEN diário. LIMIT aceita é considerada
+preenchida integralmente; comissão em USDT segue `FEE_RATE`; preços de MARKET
+usam o slippage configurado. Filtros atuais da bolsa não reproduzem eventuais
+mudanças históricas. Se SL e TP forem tocados no mesmo candle, prevalece SL.
+Candles diários não mostram filas, fills parciais, máximas intradiárias da equity
+ou o monitoramento de risco a cada 30 segundos. Portanto, a configuração e as
+decisões são compartilhadas, mas fills e resultados não são uma reprodução
+exata da conta live.
+
+O replay preserva problemas do runtime, em vez de corrigi-los silenciosamente:
+exceções de reconciliação ativam o halt, e sobras de arredondamento podem ser
+classificadas como saldo não gerenciado. A reconciliação de OCO também pode
+ajustar a baseline de risco pelo valor marcado como se parte do fluxo fosse
+externa. Os arquivos `*_runtime_errors.csv` documentam essas ocorrências. Os
+módulos live não são alterados por esta correção de pesquisa.
+
+### Pesquisa legada
+
+As funções antigas continuam disponíveis para os diagnósticos existentes.
+Para executá-las via CLI, é obrigatório indicar `--legacy`:
+
+```bash
+python backtest.py --legacy --symbol SOLUSDT --start 2022-01-01 --end 2026-10-27
+python walk_forward.py --legacy --start 2022-01-01 --end 2026-10-27
+```
+
+Esses comandos e `deep_validation.py` avaliam o perfil antigo; não devem ser
+rotulados como resultados do Aggressive C. A pesquisa C mais recente antes da
+promoção estava em `c_only_pre_live_validation.py`, na branch
+`research/c-aggressive-prelive-v1`, com dependências em outras branches de
+pesquisa. Ela não representa todas as correções operacionais posteriores do live.
+
+## Live
+
+```bash
 cp .env.example .env
 python tradebot.py
 ```
 
-Se uma versão anterior já salvou um halt falso após uma alteração manual de
-saldo confirmada, solicite uma única reparação da baseline e então inicie o bot:
+Os comandos abaixo enfileiram pedidos para uma instância live já em execução:
 
 ```bash
+python tradebot.py --decision-now
+python tradebot.py --clear-halt
 python tradebot.py --rebase-after-manual-change
-python tradebot.py
 ```
 
-O comando preserva posições, ordens e o banco; ele apenas redefine as bases de
-risco para o patrimônio Spot já reconciliado. Não use para apagar drawdown real.
+O último comando exige uma alteração manual de saldo confirmada pelo operador;
+não deve ser usado para apagar drawdown real. Estado e posições ficam no SQLite.
+Para telemetria e dashboard, veja `DASHBOARD.md`.
 
-`USE_TESTNET = True` continua como padrão. Só altere para produção depois de validar a execução, fills, OCO, reconciliação e comportamento do risco em testnet.
+## Verificação e CI
 
-## Estrutura
-
-```text
-Krypton/
-├── config.py
-├── indicators.py
-├── risk_manager.py
-├── binance_client.py
-├── tradebot.py
-├── backtest.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── README.md
+```bash
+python -m unittest discover -s tests -v
 ```
 
-## Segurança
-
-- Nunca habilite saque na API key.
-- Use somente as permissões necessárias de leitura/trading spot.
-- Restrinja a API ao IP do VPS quando possível.
-- Não use capital que você não possa perder.
-- Teste primeiro em testnet.
+Push/PR executam testes determinísticos. Pesquisa de mercado é manual no workflow
+`Krypton Backtest and Walk-Forward`, que executa `live_validation.py` nos quatro
+períodos e publica os artefatos. Um check de testes verde, isoladamente, não
+significa que houve execução de backtest com dados de mercado.
