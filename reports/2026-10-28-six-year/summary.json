@@ -1,0 +1,20 @@
+[
+  {
+    "period": "custom",
+    "start": "2020-10-28",
+    "end": "2026-10-27",
+    "return": 2.9097419509506546,
+    "cagr": 0.25520271808737927,
+    "max_drawdown": -0.24166666340661214,
+    "sharpe": 1.1915896034987714,
+    "final_capital": 39097.419509506544,
+    "runtime_error_count": 0,
+    "first_runtime_error": null,
+    "halt_date": null,
+    "orders_count": 613,
+    "fees": 1844.2007302242653,
+    "wf_folds": 25,
+    "wf_positive_folds": 12,
+    "wf_compounded_return": 2.9097419509506537
+  }
+]

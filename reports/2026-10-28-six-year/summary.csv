@@ -1,0 +1,2 @@
+period,start,end,return,cagr,max_drawdown,sharpe,final_capital,runtime_error_count,first_runtime_error,halt_date,orders_count,fees,wf_folds,wf_positive_folds,wf_compounded_return
+custom,2020-10-28,2026-10-27,2.9097419509506546,0.25520271808737927,-0.24166666340661214,1.1915896034987714,39097.419509506544,0,,,613,1844.2007302242653,25,12,2.9097419509506537

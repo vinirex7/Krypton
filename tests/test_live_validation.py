@@ -96,6 +96,22 @@ class LiveReplayTests(unittest.TestCase):
         self.assertEqual(str(v.period_start(anchor, "10m").date()), "2025-12-28")
         self.assertEqual(str(v.period_start(anchor, "4y").date()), "2022-10-28")
 
+    def test_short_warmup_requires_explicit_opt_in_and_preserves_live_gates(self):
+        start = self.frames["SOLUSDT"].index[100]
+        with self.assertRaisesRegex(ValueError, "399"):
+            v.replay(self.frames, self.filters, start, start)
+        result = v.replay(self.frames, self.filters, start, start, rounding=False, allow_short_warmup=True)
+        self.assertEqual(result["orders_count"], 0)
+        self.assertEqual(result["final_capital"], 10000.)
+        self.assertEqual(result["runtime_error_count"], 0)
+
+    def test_short_warmup_does_not_permit_missing_execution_candles(self):
+        start = self.frames["SOLUSDT"].index[100]
+        frames = dict(self.frames)
+        frames["SOLUSDT"] = frames["SOLUSDT"].drop(index=start)
+        with self.assertRaisesRegex(ValueError, "missing"):
+            v.replay(frames, self.filters, start, start, allow_short_warmup=True)
+
     def test_no_rounding_preserves_fill_quantity_and_oco_prices(self):
         ex = v.HistoricalExchange(self.frames, self.filters, 10000., rounding=False)
         ex.ts = self.start

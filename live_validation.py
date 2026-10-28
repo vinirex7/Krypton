@@ -81,7 +81,7 @@ def validate_frame(df, start, end, symbol):
         raise ValueError(f"{symbol}: invalid OHLC")
 
 
-def load_market(start, end, cache_dir):
+def load_market(start, end, cache_dir, *, allow_short_warmup=False):
     """Strict exact-market downloader: no proxy and no stale/partial cache fallback."""
     start, end = utc(start), utc(end)
     if end >= pd.Timestamp.now(tz="UTC").normalize():
@@ -90,12 +90,18 @@ def load_market(start, end, cache_dir):
     cache_dir.mkdir(parents=True, exist_ok=True)
     frames, metadata = {}, {}
     for symbol in SYMBOLS:
+        effective_start = start
+        if allow_short_warmup:
+            first = request_json("klines", {"symbol": symbol, "interval": "1d", "startTime": 0, "limit": 1})
+            if not first:
+                raise RuntimeError(f"Cannot verify listing history for {symbol}")
+            effective_start = max(start, pd.to_datetime(first[0][0], unit="ms", utc=True))
         path = cache_dir / f"{symbol}_{start.date()}_{end.date()}.csv"
         if path.exists():
             df = pd.read_csv(path, index_col=0, parse_dates=True)
             df.index = pd.to_datetime(df.index, utc=True)
         else:
-            rows, cursor = [], start
+            rows, cursor = [], effective_start
             while cursor <= end:
                 page = request_json("klines", {"symbol": symbol, "interval": "1d", "limit": 1000,
                                     "startTime": int(cursor.timestamp() * 1000),
@@ -112,12 +118,12 @@ def load_market(start, end, cache_dir):
             df = df[[1, 2, 3, 4, 5]].astype(float)
             df.columns = ["open", "high", "low", "close", "volume"]
             df.index.name = "open_time"
-            validate_frame(df, start, end, symbol)
+            validate_frame(df, effective_start, end, symbol)
             df.to_csv(path, float_format="%.12g")
             # Use exactly the serialized snapshot, including in the first run.
             df = pd.read_csv(path, index_col=0, parse_dates=True)
             df.index = pd.to_datetime(df.index, utc=True)
-        validate_frame(df, start, end, symbol)
+        validate_frame(df, effective_start, end, symbol)
         df.attrs["symbol"] = symbol
         frames[symbol] = df
         metadata[symbol] = {"rows": len(df), "start": str(df.index[0]), "end": str(df.index[-1]),
@@ -298,12 +304,12 @@ def metrics(curve):
             "final_capital": float(curve.iloc[-1])}
 
 
-def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache=None, rounding=True):
+def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache=None, rounding=True, allow_short_warmup=False):
     start, end = utc(start), utc(end)
     expected = pd.date_range(start, end, freq="D")
     for symbol in SYMBOLS:
         validate_frame(frames[symbol].loc[start:end], start, end, symbol)
-        if len(frames[symbol].loc[frames[symbol].index < start]) < live.HISTORY_LIMIT - 1:
+        if not allow_short_warmup and len(frames[symbol].loc[frames[symbol].index < start]) < live.HISTORY_LIMIT - 1:
             raise ValueError(f"{symbol}: less than 399 completed warm-up candles")
     exchange = HistoricalExchange(frames, filters, capital, rounding=rounding)
     ReplayClock.current = start + pd.Timedelta(minutes=5)
@@ -411,6 +417,8 @@ def main(mode="both"):
     parser.add_argument("--test-days", type=int, default=90)
     parser.add_argument("--no-rounding", action="store_true",
                         help="Research counterfactual: bypass exchange quantity-step and price-tick quantization only")
+    parser.add_argument("--allow-short-warmup", action="store_true",
+                        help="Allow pre-test history to start at exchange-verified listing date; no gaps permitted within test period")
     args = parser.parse_args()
     as_of = utc(args.as_of)
     end = utc(args.end) if args.end else as_of - pd.Timedelta(days=1)
@@ -420,11 +428,17 @@ def main(mode="both"):
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     logging.getLogger().setLevel(logging.ERROR)
-    frames, filters, provenance = load_market(min(periods.values()) - pd.Timedelta(days=400), end, args.cache_dir)
+    frames, filters, provenance = load_market(min(periods.values()) - pd.Timedelta(days=400), end, args.cache_dir, allow_short_warmup=args.allow_short_warmup)
     manifest = {"as_of": str(as_of.date()), "end_inclusive": str(end.date()),
                 "profile": live.frozen_profile(), "strategy_fingerprint": live.strategy_fingerprint(),
                 "assumptions": list(ASSUMPTIONS), "provenance": provenance,
-                "exchange_rounding": not args.no_rounding}
+                "exchange_rounding": not args.no_rounding, "allow_short_warmup": args.allow_short_warmup}
+    if args.allow_short_warmup:
+        manifest["assumptions"].append(
+            "Pre-test history begins no earlier than the exchange-verified listing date. "
+            "No synthetic candles: live indicators/alpha use only available history. Test-period coverage remains strict.")
+        manifest["initial_completed_candles"] = {symbol: min(live.HISTORY_LIMIT - 1, int((df.index < min(periods.values())).sum()))
+                                                  for symbol, df in frames.items()}
     if args.no_rounding:
         manifest["assumptions"].append(
             "COUNTERFACTUAL: step-size and tick-size quantization disabled for all simulated fills and OCO levels. "
@@ -442,7 +456,7 @@ def main(mode="both"):
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
     cache, summaries = {}, []
     for label, start in periods.items():
-        result = replay(frames, filters, start, end, signal_cache=cache, rounding=not args.no_rounding)
+        result = replay(frames, filters, start, end, signal_cache=cache, rounding=not args.no_rounding, allow_short_warmup=args.allow_short_warmup)
         summary = {"period": label, "start": str(start.date()), "end": str(end.date()),
                    **{k: v for k, v in result.items() if k not in {"equity_curve", "orders", "rejections", "runtime_errors", "state"}}}
         result["equity_curve"].to_csv(output / f"{label}_equity.csv")

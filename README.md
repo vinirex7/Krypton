@@ -149,3 +149,19 @@ mínimo financeiro, custos, gates, sinais, regras de reconciliação e risco sã
 mantidos. A aritmética continua em float64. Trata-se de um contrafactual para
 isolar o efeito do arredondamento; as ordens resultantes podem ser inválidas na
 Binance real. Sem essa opção, o replay mantém o arredondamento padrão do live.
+
+### Janela de seis anos e histórico anterior à listagem
+
+```bash
+python live_validation.py --start 2020-10-28 --end 2026-10-27 --no-rounding \
+  --allow-short-warmup --cache-dir .market-cache-six-year \
+  --output results/2026-10-28-six-year
+```
+
+`--allow-short-warmup` permite que o histórico de preparação comece na primeira
+listagem verificada na API oficial, quando esta for posterior ao início do
+warm-up solicitado. Não permite lacunas durante o período testado nem cria
+candles anteriores à listagem. Cada decisão usa os candles disponíveis, até o
+limite live; filtros que exigem histórico maior aguardam esse histórico. O
+manifesto registra a quantidade inicial de candles por ativo. Sem essa opção,
+a exigência anterior de 399 candles de preparação é preservada.

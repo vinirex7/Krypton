@@ -1,0 +1,55 @@
+/workspace/scratch/138ed3f12991/Krypton/live_validation.py:19: DeprecationWarning: 
+Pyarrow will become a required dependency of pandas in the next major release of pandas (pandas 3.0),
+(to allow more performant data types, such as the Arrow string type, and better interoperability with other libraries)
+but was not found to be installed on your system.
+If this would cause problems for you,
+please provide us feedback at https://github.com/pandas-dev/pandas/issues/54466
+        
+  import pandas as pd
+Data verified: SOLUSDT: 2269 candles
+Data verified: BTCUSDT: 2591 candles
+Data verified: BNBUSDT: 2591 candles
+Data verified: ETHUSDT: 2591 candles
+Replay 2020-10-28: 2020-10-28 equity=9939.91
+Replay 2020-10-28: 2021-01-26 equity=13620.01
+Replay 2020-10-28: 2021-04-26 equity=18425.73
+Replay 2020-10-28: 2021-07-25 equity=16419.98
+Replay 2020-10-28: 2021-10-23 equity=24881.96
+Replay 2020-10-28: 2022-01-21 equity=22620.87
+Replay 2020-10-28: 2022-04-21 equity=22620.87
+Replay 2020-10-28: 2022-07-20 equity=22620.87
+Replay 2020-10-28: 2022-10-18 equity=22620.87
+Replay 2020-10-28: 2023-01-16 equity=22893.53
+Replay 2020-10-28: 2023-04-16 equity=25709.24
+Replay 2020-10-28: 2023-07-15 equity=26262.74
+Replay 2020-10-28: 2023-10-13 equity=24183.11
+Replay 2020-10-28: 2024-01-11 equity=30090.58
+Replay 2020-10-28: 2024-04-10 equity=40950.72
+Replay 2020-10-28: 2024-07-09 equity=37664.43
+Replay 2020-10-28: 2024-10-07 equity=35289.58
+Replay 2020-10-28: 2025-01-05 equity=39126.29
+Replay 2020-10-28: 2025-04-05 equity=33409.39
+Replay 2020-10-28: 2025-07-04 equity=34404.85
+Replay 2020-10-28: 2025-10-02 equity=43991.26
+Replay 2020-10-28: 2025-12-31 equity=38874.75
+Replay 2020-10-28: 2026-03-31 equity=38874.75
+Replay 2020-10-28: 2026-06-29 equity=38874.75
+Replay 2020-10-28: 2026-09-27 equity=41929.83
+{
+  "period": "custom",
+  "start": "2020-10-28",
+  "end": "2026-10-27",
+  "return": 2.9097419509506546,
+  "cagr": 0.25520271808737927,
+  "max_drawdown": -0.24166666340661214,
+  "sharpe": 1.1915896034987714,
+  "final_capital": 39097.419509506544,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 613,
+  "fees": 1844.2007302242653,
+  "wf_folds": 25,
+  "wf_positive_folds": 12,
+  "wf_compounded_return": 2.9097419509506537
+}
