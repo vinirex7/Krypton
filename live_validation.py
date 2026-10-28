@@ -41,7 +41,7 @@ ASSUMPTIONS = [
     "Replays current live reconciliation even for OCO fills; its marked-value external-flow adjustment is not silently corrected.",
     "Runtime exceptions are caught as in live_c.run; reconciliation exceptions set portfolio_halted and are logged, never silently fixed.",
     "No artificial 0.3% transfer charge: current Spot-only live only re-earmarks cash and charges executed trades.",
-    "Walk-forward uses fixed live parameters, 365-day preceding diagnostic history, contiguous 90-day test slices, state carried forward.",
+    "Walk-forward uses fixed live parameters, 399 completed daily candles of causal history, contiguous 90-day test slices, state carried forward.",
     "No fitting or TP selection. Historical windows before strategy promotion are retrospective, not untouched out-of-sample evidence.",
 ]
 
@@ -352,9 +352,9 @@ def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache
             if i % 90 == 0:
                 print(f"Replay {start.date()}: {ts.date()} equity={eq:.2f}", flush=True)
     curve = pd.Series([v for _, v in points], index=[t for t, _ in points], name="equity")
-    return {**metrics(curve), "equity_curve": curve, "orders": pd.DataFrame(exchange.orders),
-            "rejections": pd.DataFrame(exchange.rejections), "state": bot.state,
-            "runtime_errors": pd.DataFrame(runtime_errors), "runtime_error_count": len(runtime_errors),
+    return {**metrics(curve), "equity_curve": curve, "orders": pd.DataFrame(exchange.orders, columns=["time", "symbol", "sleeve", "side", "quantity", "price", "fee", "kind"]),
+            "rejections": pd.DataFrame(exchange.rejections, columns=["time", "symbol", "side", "kind"]), "state": bot.state,
+            "runtime_errors": pd.DataFrame(runtime_errors, columns=["time", "phase", "error"]), "runtime_error_count": len(runtime_errors),
             "first_runtime_error": runtime_errors[0] if runtime_errors else None,
             "halt_date": halt_date, "orders_count": len(exchange.orders),
             "fees": sum(o["fee"] for o in exchange.orders)}
@@ -363,7 +363,7 @@ def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache
 def walk_forward(curve, start, end, test_days=90):
     """Stateful fixed-policy temporal validation, including a final partial fold.
 
-    Training history supplies only causal indicators, never a selected parameter.
+    Pre-test history supplies only causal indicators, never a selected parameter.
     Stitching contiguous test slices must equal the original continuous replay.
     """
     if test_days <= 0:
@@ -374,7 +374,7 @@ def walk_forward(curve, start, end, test_days=90):
     while cursor < end_exclusive:
         stop = min(cursor + pd.Timedelta(days=test_days), end_exclusive)
         fold_curve = curve.loc[cursor:stop]
-        rows.append({"fold": len(rows) + 1, "history_start": str((cursor - pd.Timedelta(days=365)).date()),
+        rows.append({"fold": len(rows) + 1, "history_start": str((cursor - pd.Timedelta(days=live.HISTORY_LIMIT - 1)).date()),
                      "history_end": str((cursor - pd.Timedelta(days=1)).date()),
                      "test_start": str(cursor.date()), "test_end": str((stop - pd.Timedelta(days=1)).date()),
                      "test_days": (stop - cursor).days, "parameters": "fixed live; no selection",

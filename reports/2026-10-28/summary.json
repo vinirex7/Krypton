@@ -1,0 +1,86 @@
+[
+  {
+    "period": "10m",
+    "start": "2025-12-28",
+    "end": "2026-10-27",
+    "return": 0.01040649503695823,
+    "cagr": 0.012516270005938468,
+    "max_drawdown": -0.0785053374749527,
+    "sharpe": 0.19180436638466852,
+    "final_capital": 10104.064950369582,
+    "runtime_error_count": 0,
+    "first_runtime_error": null,
+    "halt_date": null,
+    "orders_count": 39,
+    "fees": 54.43662669756715,
+    "wf_folds": 4,
+    "wf_positive_folds": 1,
+    "wf_compounded_return": 0.01040649503695823
+  },
+  {
+    "period": "2y",
+    "start": "2024-10-28",
+    "end": "2026-10-27",
+    "return": 0.19986435226293153,
+    "cagr": 0.095451553058439,
+    "max_drawdown": -0.0543531777555083,
+    "sharpe": 1.0147180081961296,
+    "final_capital": 11998.643522629316,
+    "runtime_error_count": 28,
+    "first_runtime_error": {
+      "time": "2024-12-08 00:00:00+00:00",
+      "phase": "runtime_reconciliation",
+      "error": "Saldo n\u00e3o gerenciado detectado em BTCUSDT: +0.000050000000"
+    },
+    "halt_date": "2024-12-08",
+    "orders_count": 49,
+    "fees": 62.6368149542836,
+    "wf_folds": 9,
+    "wf_positive_folds": 5,
+    "wf_compounded_return": 0.19986435226293175
+  },
+  {
+    "period": "3y",
+    "start": "2023-10-28",
+    "end": "2026-10-27",
+    "return": 0.5032158468020449,
+    "cagr": 0.14549620702245658,
+    "max_drawdown": -0.20330910695730475,
+    "sharpe": 0.9426847929993052,
+    "final_capital": 15032.158468020449,
+    "runtime_error_count": 1499,
+    "first_runtime_error": {
+      "time": "2024-10-05 00:00:00+00:00",
+      "phase": "runtime_reconciliation",
+      "error": "Saldo n\u00e3o gerenciado detectado em BNBUSDT: +0.009000000000"
+    },
+    "halt_date": "2024-10-05",
+    "orders_count": 124,
+    "fees": 177.61263607889936,
+    "wf_folds": 13,
+    "wf_positive_folds": 7,
+    "wf_compounded_return": 0.5032158468020451
+  },
+  {
+    "period": "4y",
+    "start": "2022-10-28",
+    "end": "2026-10-27",
+    "return": 0.6643897017210227,
+    "cagr": 0.1358310977439321,
+    "max_drawdown": -0.11764117777453442,
+    "sharpe": 1.009871176740498,
+    "final_capital": 16643.897017210227,
+    "runtime_error_count": 1682,
+    "first_runtime_error": {
+      "time": "2024-04-08 00:00:00+00:00",
+      "phase": "runtime_reconciliation",
+      "error": "Saldo n\u00e3o gerenciado detectado em BTCUSDT: +0.000070000000"
+    },
+    "halt_date": "2024-04-08",
+    "orders_count": 148,
+    "fees": 190.61657455566592,
+    "wf_folds": 17,
+    "wf_positive_folds": 9,
+    "wf_compounded_return": 0.6643897017210223
+  }
+]

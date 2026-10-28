@@ -58,8 +58,8 @@ não são calculados cumulativamente sobre vários anos quando o live os reinici
 nessa janela móvel.
 
 A validação walk-forward mantém a configuração live fixa e o estado da carteira
-entre janelas contíguas de 90 dias, incluindo a janela final parcial. Há 365 dias
-de histórico causal anterior a cada janela, sem treinamento de parâmetros ou
+entre janelas contíguas de 90 dias, incluindo a janela final parcial. Há 399 candles diários
+fechados de histórico causal anterior a cada decisão, sem treinamento de parâmetros ou
 seleção de TP. O produto dos retornos das janelas coincide, por construção e
 verificação, com o replay contínuo. Isso mede estabilidade temporal da mesma
 estratégia; não é um segundo retorno independente nem uma validação intocada:

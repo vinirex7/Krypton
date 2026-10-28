@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "strategy_fingerprint": "4318a98c601fa1e7ec251e242939af1a8ed85d86035a812039ecb3cc9dbcca1a",
+  "initialized_at": "2025-12-28 00:00:00+00:00",
+  "tactical_cash": 2445.247806858455,
+  "alpha_cash": 2542.620998811127,
+  "tactical_positions": {
+    "BTCUSDT": {
+      "entry_price": 81795.33999999998,
+      "quantity": 0.02527,
+      "stop_loss": 77286.54708455953,
+      "take_profit": 88558.52937316067,
+      "order_list_id": 57
+    },
+    "BNBUSDT": {
+      "entry_price": 736.46,
+      "quantity": 1.45,
+      "stop_loss": 687.2352127824345,
+      "take_profit": 810.2971808263484,
+      "order_list_id": 59
+    }
+  },
+  "alpha_qty": {
+    "BTCUSDT": 0.0,
+    "ETHUSDT": 0.5051,
+    "SOLUSDT": 7.889000000000001,
+    "BNBUSDT": 0.0
+  },
+  "last_alpha_rebalance": "2026-09-23",
+  "last_sleeve_rebalance": "2026-09-24",
+  "portfolio_peak": 10887.837151031385,
+  "portfolio_daily_start": 10065.572584269581,
+  "portfolio_daily_date": "2026-10-27",
+  "portfolio_halted": false,
+  "tactical_risk_state": {
+    "initial_capital": 5162.007641796364,
+    "peak_capital": 6305.258003068425,
+    "daily_start_cap": 5547.813958058456,
+    "daily_date": "2026-10-27",
+    "halted": false,
+    "circuit_breaker": false,
+    "risk_per_trade": 0.02,
+    "max_drawdown_pct": 0.3,
+    "circuit_breaker_pct": 0.04
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "cleanup_run": "https://github.com/vinirex7/Krypton/actions/runs/40786606225",
+  "verified_date": "2026-10-28",
+  "deleted_count": 17,
+  "archives": [
+    {
+      "ref": "refs/tags/archive/2026-10-28/chore/remove-obsolete-files-20260904",
+      "sha": "514c645059817dafdc5d80b718c8d3376b800cd4"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/feature/aggressive-c-spot-margin-pool",
+      "sha": "e071705a7a26bd28aab510dce0af642996b612ce"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/feature/client-dashboard-mvp",
+      "sha": "b3bbfa07d3b123d9eb18f3eb1aa2baa809337ab0"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/feature/live-aggressive-c",
+      "sha": "e765c884a953da35ac5e8db64a94260199b636ba"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/backtest-live-safety-2026-08",
+      "sha": "04e0102e612bea46f418793326483d9fb9068754"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/hard-stop-concentration-gate",
+      "sha": "580440edee014fcfa0a526c2c08ac77d9a2c20d3"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/live-c-entrypoint",
+      "sha": "42dbe0b32d6eb1d683c33bd9711bf08cba53b8c1"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/manual-balance-false-drawdown",
+      "sha": "b410ab5b9b0e80b82f2f7cdf368303cacef607dc"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/manual-balance-reconciliation",
+      "sha": "7de51e17fb1f0cd34bdf8f80f3dea3e94bf80b34"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/oco-quantity-format",
+      "sha": "2368cfa415ca974f5cc53eef1cb3096d34ae23ed"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/fix/spot-only-manual-decision",
+      "sha": "e8de9664030903d59a7fb0568b036651a0a76a4d"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/paper/cross-asset-hybrid-v1",
+      "sha": "5a5628983640baa11e46b9fd15ed048c21bbbf5e"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/research/cross-asset-allocation-v1",
+      "sha": "29e5b17e2c36ce7bb015fcf40114888ad9ad85a5"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/research/cross-asset-opportunity",
+      "sha": "fdbc608fbc3275b39436aad2f0bf8fbb2bbe7a85"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/research/entry-state-forensics",
+      "sha": "66ab111d6a4767aeed316c390c08b7ea30f48fa4"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/research/forensic-bull-sideways",
+      "sha": "ae7463e953f47421c2a8f90507096c9c0f7167e4"
+    },
+    {
+      "ref": "refs/tags/archive/2026-10-28/research/stages-2-6-robustness",
+      "sha": "a079f89835484215783b4dfc498be3f1e594dc5d"
+    }
+  ],
+  "retained": [
+    {
+      "branch": "main",
+      "reason": "Latest canonical live"
+    },
+    {
+      "branch": "research/adaptive-portfolio-v1",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/aggressive-risk-frontier-v1",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/c-aggressive-prelive-v1",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/carry-market-neutral-v1",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/core-v2-validation",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/cross-asset-alpha-v2",
+      "reason": "Open research PR with exclusive work"
+    },
+    {
+      "branch": "research/mean-reversion-alpha-v1",
+      "reason": "Exclusive research; not proven obsolete"
+    }
+  ]
+}

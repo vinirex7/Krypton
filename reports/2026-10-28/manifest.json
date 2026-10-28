@@ -1,0 +1,151 @@
+{
+  "as_of": "2026-10-28",
+  "end_inclusive": "2026-10-27",
+  "profile": {
+    "name": "AGGRESSIVE_C",
+    "tactical_symbols": {
+      "SOLUSDT": 0.3125,
+      "BTCUSDT": 0.5,
+      "BNBUSDT": 0.1875
+    },
+    "alpha_symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT"
+    ],
+    "tactical_weight": 0.55,
+    "alpha_weight": 0.45,
+    "tactical_risk_per_trade": 0.02,
+    "alpha_target_vol": 0.3,
+    "alpha_top_n": 2,
+    "alpha_min_selected": 2,
+    "alpha_rebalance_days": 45,
+    "sleeve_rebalance_days": 90,
+    "transfer_cost_assumption": 0.003,
+    "max_drawdown": 0.3,
+    "momentum_windows": [
+      30,
+      90,
+      180
+    ],
+    "vol_window": 20,
+    "cov_window": 60,
+    "continuity_min_age": 90,
+    "continuity_short_window": 30,
+    "continuity_long_window": 90,
+    "regime_sma": 200,
+    "stop_atr_mult": 2.0,
+    "tp_atr_mult": 3.0,
+    "spot_only": true,
+    "directional_leverage": 1.0,
+    "execution": "completed_close_to_next_daily_open_window"
+  },
+  "strategy_fingerprint": "4318a98c601fa1e7ec251e242939af1a8ed85d86035a812039ecb3cc9dbcca1a",
+  "assumptions": [
+    "Uses AggressiveCTradeBot.daily_cycle and inherited execution/reconciliation methods unchanged.",
+    "Daily decisions use preceding completed candles; exchange limit=400 includes the current candle, leaving 399 completed bars.",
+    "00:05 UTC mid-price is approximated by daily open; accepted LIMIT orders are assumed fully filled immediately.",
+    "Fee is FEE_RATE charged in quote USDT; actual BNB discounts/base-asset commissions are unknown.",
+    "LIMIT offset +/-0.05% and tactical signal-price deviation gate are the live implementation; MARKET/stop slippage uses config.",
+    "OCO gap fills precede the daily decision; intraday double touches resolve stop first. TP fills at limit price.",
+    "Risk is sampled at open, fills and close; 30-second peaks/halts and intraday ordering cannot be recovered from daily bars.",
+    "Current exchange LOT_SIZE/PRICE_FILTER/NOTIONAL filters are used, not unavailable historical filter snapshots.",
+    "Starts in cash, no manual decisions/deposits/withdrawals, no final forced liquidation; final equity is mark-to-market.",
+    "Replays current live reconciliation even for OCO fills; its marked-value external-flow adjustment is not silently corrected.",
+    "Runtime exceptions are caught as in live_c.run; reconciliation exceptions set portfolio_halted and are logged, never silently fixed.",
+    "No artificial 0.3% transfer charge: current Spot-only live only re-earmarks cash and charges executed trades.",
+    "Walk-forward uses fixed live parameters, 399 completed daily candles of causal history, contiguous 90-day test slices, state carried forward.",
+    "No fitting or TP selection. Historical windows before strategy promotion are retrospective, not untouched out-of-sample evidence."
+  ],
+  "provenance": {
+    "market": "https://data-api.binance.vision/api/v3",
+    "data": {
+      "SOLUSDT": {
+        "rows": 1861,
+        "start": "2021-09-23 00:00:00+00:00",
+        "end": "2026-10-27 00:00:00+00:00",
+        "sha256": "fc2ccc4bf978e683978d1b5319b3282423833630fc6cc70def6fc76700af82de"
+      },
+      "BTCUSDT": {
+        "rows": 1861,
+        "start": "2021-09-23 00:00:00+00:00",
+        "end": "2026-10-27 00:00:00+00:00",
+        "sha256": "b30ca17981718784353ba04dbc10e1f0bf90533d224291d1d30ebcf87da5085a"
+      },
+      "BNBUSDT": {
+        "rows": 1861,
+        "start": "2021-09-23 00:00:00+00:00",
+        "end": "2026-10-27 00:00:00+00:00",
+        "sha256": "90a38c08e462a928cd7f8e0cb0c0dcc52578e79f8ffcd5010baf5f470ebb660e"
+      },
+      "ETHUSDT": {
+        "rows": 1861,
+        "start": "2021-09-23 00:00:00+00:00",
+        "end": "2026-10-27 00:00:00+00:00",
+        "sha256": "2046c3cc04b17d2604915b828047c8b78cea22f0920084b7a8697a339034814a"
+      }
+    },
+    "filters_snapshot": {
+      "retrieved_at": "2026-10-28T23:15:18.533665+00:00",
+      "symbols": {
+        "SOLUSDT": {
+          "step_size": 0.001,
+          "tick_size": 0.01,
+          "min_notional": 5.0
+        },
+        "BTCUSDT": {
+          "step_size": 1e-05,
+          "tick_size": 0.01,
+          "min_notional": 5.0
+        },
+        "BNBUSDT": {
+          "step_size": 0.001,
+          "tick_size": 0.01,
+          "min_notional": 5.0
+        },
+        "ETHUSDT": {
+          "step_size": 0.0001,
+          "tick_size": 0.01,
+          "min_notional": 5.0
+        }
+      }
+    }
+  },
+  "execution_config": {
+    "SUPERTREND_PERIOD": 7,
+    "SUPERTREND_MULTIPLIER": 3.0,
+    "RSI_PERIOD": 14,
+    "RSI_LOW": 40,
+    "RSI_HIGH": 70,
+    "MACD_FAST": 12,
+    "MACD_SLOW": 26,
+    "MACD_SIGNAL": 9,
+    "FEE_RATE": 0.001,
+    "ENTRY_SLIPPAGE_PCT": 0.0005,
+    "EXIT_SLIPPAGE_PCT": 0.0005,
+    "SLIPPAGE_LIMIT_PCT": 0.005,
+    "CIRCUIT_BREAKER_PCT": 0.04,
+    "MAX_SIMULTANEOUS_POS": 3,
+    "STOP_LOSS_ATR_MULT": 2.0,
+    "TAKE_PROFIT_ATR_MULT": 3.0,
+    "REGIME_SMA_PERIOD": 200,
+    "TIMEFRAME": "1d"
+  },
+  "source_sha256": {
+    "aggressive_c_live.py": "6f342a87c30a74a815bbc9f4df110efd522bed6503e9fc83083cb62f03ad9df1",
+    "live_c.py": "4c43c271fcfe3908500dc94b279c7ea79d804d81fb6f787c2325f1bf1d3a7566",
+    "config.py": "04f182a76bbd499e2e17a402c3872a9bdb1a374c28c9d7936693fe9be42e72c3",
+    "risk_manager.py": "bc3263fcac33bee9277865b67288bec19bb10a73d2acc6b54e6063bc672c286f",
+    "binance_client.py": "6c33a01d0eb0d2aeb6808b319ffec0cdd3547365e83885b8508395e76281e327",
+    "indicators.py": "65cec783121a511c4f0403fa40478874feb089d839a30f43afd63528ee40996d",
+    "live_validation.py": "598995cd17752a8f455316f527027af9d7ebfa75eee6f1e9ae9b249885f4eb90"
+  },
+  "versions": {
+    "numpy": "1.26.4",
+    "pandas": "2.2.0"
+  },
+  "analyzed_live_commit": "cedce58fc59d330dd2092b813f88ec360da3fa43",
+  "market_run_command": "python live_validation.py --as-of 2026-10-28 --output results/2026-10-28",
+  "verification": "Two complete executions produced identical returns and final capitals; final formatting records causal 399-bar history."
+}
