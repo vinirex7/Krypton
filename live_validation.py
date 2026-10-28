@@ -141,11 +141,10 @@ def load_market(start, end, cache_dir):
 
 class HistoricalExchange:
     """In-memory Spot exchange. No client, API keys, network orders or state DB."""
-    _round_step = BinanceInterface._round_step
-    _round_tick = BinanceInterface._round_tick
     _step_precision = staticmethod(BinanceInterface._step_precision)
 
-    def __init__(self, frames, filters, capital):
+    def __init__(self, frames, filters, capital, *, rounding=True):
+        self.rounding = rounding
         self.frames, self.filters, self.cash = frames, filters, capital
         self.qty = {s: 0.0 for s in SYMBOLS}
         self.prices = {}
@@ -155,6 +154,12 @@ class HistoricalExchange:
         self.sleeve = ""
         self.next_id = 1
         self.rejections = []
+
+    def _round_step(self, quantity, step):
+        return BinanceInterface._round_step(self, quantity, step) if self.rounding else quantity
+
+    def _round_tick(self, price, tick):
+        return BinanceInterface._round_tick(self, price, tick) if self.rounding else price
 
     def get_current_price(self, symbol):
         return self.prices[symbol]
@@ -293,14 +298,14 @@ def metrics(curve):
             "final_capital": float(curve.iloc[-1])}
 
 
-def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache=None):
+def replay(frames, filters, start, end, *, capital=INITIAL_CAPITAL, signal_cache=None, rounding=True):
     start, end = utc(start), utc(end)
     expected = pd.date_range(start, end, freq="D")
     for symbol in SYMBOLS:
         validate_frame(frames[symbol].loc[start:end], start, end, symbol)
         if len(frames[symbol].loc[frames[symbol].index < start]) < live.HISTORY_LIMIT - 1:
             raise ValueError(f"{symbol}: less than 399 completed warm-up candles")
-    exchange = HistoricalExchange(frames, filters, capital)
+    exchange = HistoricalExchange(frames, filters, capital, rounding=rounding)
     ReplayClock.current = start + pd.Timedelta(minutes=5)
     signal_cache = {} if signal_cache is None else signal_cache
     original_signals = live.compute_signals
@@ -404,6 +409,8 @@ def main(mode="both"):
     parser.add_argument("--output", default="results/live-parity")
     parser.add_argument("--cache-dir", default=".market-cache")
     parser.add_argument("--test-days", type=int, default=90)
+    parser.add_argument("--no-rounding", action="store_true",
+                        help="Research counterfactual: bypass exchange quantity-step and price-tick quantization only")
     args = parser.parse_args()
     as_of = utc(args.as_of)
     end = utc(args.end) if args.end else as_of - pd.Timedelta(days=1)
@@ -416,7 +423,13 @@ def main(mode="both"):
     frames, filters, provenance = load_market(min(periods.values()) - pd.Timedelta(days=400), end, args.cache_dir)
     manifest = {"as_of": str(as_of.date()), "end_inclusive": str(end.date()),
                 "profile": live.frozen_profile(), "strategy_fingerprint": live.strategy_fingerprint(),
-                "assumptions": ASSUMPTIONS, "provenance": provenance}
+                "assumptions": list(ASSUMPTIONS), "provenance": provenance,
+                "exchange_rounding": not args.no_rounding}
+    if args.no_rounding:
+        manifest["assumptions"].append(
+            "COUNTERFACTUAL: step-size and tick-size quantization disabled for all simulated fills and OCO levels. "
+            "Minimum notional, balance checks, fees, signals, risk, dust reconciliation thresholds and halts unchanged. "
+            "Float64 arithmetic remains; this is not a numerical arbitrary-precision experiment or executable Binance order model.")
     manifest["execution_config"] = {name: getattr(config, name) for name in (
         "SUPERTREND_PERIOD", "SUPERTREND_MULTIPLIER", "RSI_PERIOD", "RSI_LOW", "RSI_HIGH",
         "MACD_FAST", "MACD_SLOW", "MACD_SIGNAL", "FEE_RATE", "ENTRY_SLIPPAGE_PCT",
@@ -429,7 +442,7 @@ def main(mode="both"):
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
     cache, summaries = {}, []
     for label, start in periods.items():
-        result = replay(frames, filters, start, end, signal_cache=cache)
+        result = replay(frames, filters, start, end, signal_cache=cache, rounding=not args.no_rounding)
         summary = {"period": label, "start": str(start.date()), "end": str(end.date()),
                    **{k: v for k, v in result.items() if k not in {"equity_curve", "orders", "rejections", "runtime_errors", "state"}}}
         result["equity_curve"].to_csv(output / f"{label}_equity.csv")

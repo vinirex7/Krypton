@@ -96,6 +96,26 @@ class LiveReplayTests(unittest.TestCase):
         self.assertEqual(str(v.period_start(anchor, "10m").date()), "2025-12-28")
         self.assertEqual(str(v.period_start(anchor, "4y").date()), "2022-10-28")
 
+    def test_no_rounding_preserves_fill_quantity_and_oco_prices(self):
+        ex = v.HistoricalExchange(self.frames, self.filters, 10000., rounding=False)
+        ex.ts = self.start
+        ex.prices = {s: 100. for s in v.SYMBOLS}
+        quantity, price = .123456789123, 100.0123456789
+        fill = ex.place_limit_order("BTCUSDT", "BUY", quantity, price, self.filters["BTCUSDT"])
+        self.assertEqual(float(fill["executedQty"]), quantity)
+        self.assertEqual(ex.orders[-1]["price"], price)
+        tp, sl = 110.123456789, 90.123456789
+        oco = ex.create_oco_order("BTCUSDT", quantity, tp, sl, self.filters["BTCUSDT"])
+        self.assertEqual(ex.ocos[oco["orderListId"]], {"symbol": "BTCUSDT", "quantity": quantity, "tp": tp, "sl": sl})
+
+    def test_default_still_quantizes_and_no_rounding_keeps_minimum_notional(self):
+        ex = v.HistoricalExchange(self.frames, self.filters, 10000.)
+        self.assertEqual(ex._round_step(.123456789, .01), .12)
+        ex.rounding = False
+        ex.ts = self.start
+        ex.prices = {s: 100. for s in v.SYMBOLS}
+        self.assertIsNone(ex.place_limit_order("BTCUSDT", "BUY", .00123456789, 100., self.filters["BTCUSDT"]))
+
     def test_runtime_reconciliation_failure_halts_instead_of_fabricating_trades(self):
         with patch.object(v.ReplayBot, "_reconcile_exchange_state", side_effect=RuntimeError("unmanaged balance")):
             result = v.replay(self.frames, self.filters, self.start, self.end)

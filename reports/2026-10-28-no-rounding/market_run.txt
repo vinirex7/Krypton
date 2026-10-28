@@ -1,0 +1,127 @@
+/workspace/scratch/138ed3f12991/Krypton/live_validation.py:19: DeprecationWarning: 
+Pyarrow will become a required dependency of pandas in the next major release of pandas (pandas 3.0),
+(to allow more performant data types, such as the Arrow string type, and better interoperability with other libraries)
+but was not found to be installed on your system.
+If this would cause problems for you,
+please provide us feedback at https://github.com/pandas-dev/pandas/issues/54466
+        
+  import pandas as pd
+Data verified: SOLUSDT: 1861 candles
+Data verified: BTCUSDT: 1861 candles
+Data verified: BNBUSDT: 1861 candles
+Data verified: ETHUSDT: 1861 candles
+Replay 2025-12-28: 2025-12-28 equity=10000.00
+Replay 2025-12-28: 2026-03-28 equity=10000.00
+Replay 2025-12-28: 2026-06-26 equity=10000.00
+Replay 2025-12-28: 2026-09-24 equity=10738.97
+{
+  "period": "10m",
+  "start": "2025-12-28",
+  "end": "2026-10-27",
+  "return": 0.01041786382479204,
+  "cagr": 0.012529957917049916,
+  "max_drawdown": -0.0784969043578535,
+  "sharpe": 0.19197512421774063,
+  "final_capital": 10104.17863824792,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 39,
+  "fees": 54.46965388975155,
+  "wf_folds": 4,
+  "wf_positive_folds": 1,
+  "wf_compounded_return": 0.01041786382479204
+}
+Replay 2024-10-28: 2024-10-28 equity=10140.11
+Replay 2024-10-28: 2025-01-26 equity=12343.14
+Replay 2024-10-28: 2025-04-26 equity=10387.38
+Replay 2024-10-28: 2025-07-25 equity=11641.39
+Replay 2024-10-28: 2025-10-23 equity=12433.86
+Replay 2024-10-28: 2026-01-21 equity=11421.29
+Replay 2024-10-28: 2026-04-21 equity=11421.29
+Replay 2024-10-28: 2026-07-20 equity=11421.29
+Replay 2024-10-28: 2026-10-18 equity=11970.28
+{
+  "period": "2y",
+  "start": "2024-10-28",
+  "end": "2026-10-27",
+  "return": 0.18489162108420998,
+  "cagr": 0.08859051664592643,
+  "max_drawdown": -0.21401150143845626,
+  "sharpe": 0.4999056544945656,
+  "final_capital": 11848.9162108421,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 245,
+  "fees": 308.7491369247985,
+  "wf_folds": 9,
+  "wf_positive_folds": 4,
+  "wf_compounded_return": 0.18489162108420976
+}
+Replay 2023-10-28: 2023-10-28 equity=9998.59
+Replay 2023-10-28: 2024-01-26 equity=12814.83
+Replay 2023-10-28: 2024-04-25 equity=17630.29
+Replay 2023-10-28: 2024-07-24 equity=17860.45
+Replay 2023-10-28: 2024-10-22 equity=15237.36
+Replay 2023-10-28: 2025-01-20 equity=18965.00
+Replay 2023-10-28: 2025-04-20 equity=16166.05
+Replay 2023-10-28: 2025-07-19 equity=18035.51
+Replay 2023-10-28: 2025-10-17 equity=18463.83
+Replay 2023-10-28: 2026-01-15 equity=17239.21
+Replay 2023-10-28: 2026-04-15 equity=17239.21
+Replay 2023-10-28: 2026-07-14 equity=17239.21
+Replay 2023-10-28: 2026-10-12 equity=17893.70
+{
+  "period": "3y",
+  "start": "2023-10-28",
+  "end": "2026-10-27",
+  "return": 0.7718121087932364,
+  "cagr": 0.21000454123062906,
+  "max_drawdown": -0.20457065166061605,
+  "sharpe": 0.9373773141146103,
+  "final_capital": 17718.121087932363,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 380,
+  "fees": 668.0910192982078,
+  "wf_folds": 13,
+  "wf_positive_folds": 7,
+  "wf_compounded_return": 0.771812108793237
+}
+Replay 2022-10-28: 2022-10-28 equity=10000.00
+Replay 2022-10-28: 2023-01-26 equity=10140.94
+Replay 2022-10-28: 2023-04-26 equity=9937.10
+Replay 2022-10-28: 2023-07-25 equity=10234.69
+Replay 2022-10-28: 2023-10-23 equity=10373.90
+Replay 2022-10-28: 2024-01-21 equity=13538.59
+Replay 2022-10-28: 2024-04-20 equity=16916.69
+Replay 2022-10-28: 2024-07-19 equity=17180.13
+Replay 2022-10-28: 2024-10-17 equity=14493.32
+Replay 2022-10-28: 2025-01-15 equity=17063.14
+Replay 2022-10-28: 2025-04-15 equity=14687.47
+Replay 2022-10-28: 2025-07-14 equity=16077.26
+Replay 2022-10-28: 2025-10-12 equity=19253.14
+Replay 2022-10-28: 2026-01-10 equity=16847.71
+Replay 2022-10-28: 2026-04-10 equity=16847.71
+Replay 2022-10-28: 2026-07-09 equity=16847.71
+Replay 2022-10-28: 2026-10-07 equity=18752.72
+{
+  "period": "4y",
+  "start": "2022-10-28",
+  "end": "2026-10-27",
+  "return": 0.7788118087449636,
+  "cagr": 0.15486840747237052,
+  "max_drawdown": -0.218262837979614,
+  "sharpe": 0.7853139915541689,
+  "final_capital": 17788.118087449635,
+  "runtime_error_count": 0,
+  "first_runtime_error": null,
+  "halt_date": null,
+  "orders_count": 443,
+  "fees": 719.8265889263768,
+  "wf_folds": 17,
+  "wf_positive_folds": 9,
+  "wf_compounded_return": 0.7788118087449636
+}

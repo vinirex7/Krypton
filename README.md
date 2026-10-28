@@ -135,3 +135,17 @@ Push/PR executam testes determinísticos. Pesquisa de mercado é manual no workf
 `Krypton Backtest and Walk-Forward`, que executa `live_validation.py` nos quatro
 períodos e publica os artefatos. Um check de testes verde, isoladamente, não
 significa que houve execução de backtest com dados de mercado.
+
+### Experimento sem arredondamento de ordens
+
+```bash
+python live_validation.py --as-of 2026-10-28 --no-rounding \
+  --cache-dir reports/2026-10-28/data --output results/2026-10-28-no-rounding
+```
+
+`--no-rounding` desativa somente a quantização de quantidades por `stepSize`
+e preços por `tickSize` na bolsa simulada, incluindo OCO. Todos os filtros de
+mínimo financeiro, custos, gates, sinais, regras de reconciliação e risco são
+mantidos. A aritmética continua em float64. Trata-se de um contrafactual para
+isolar o efeito do arredondamento; as ordens resultantes podem ser inválidas na
+Binance real. Sem essa opção, o replay mantém o arredondamento padrão do live.

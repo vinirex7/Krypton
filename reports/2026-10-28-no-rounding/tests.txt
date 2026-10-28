@@ -1,0 +1,108 @@
+test_alpha_breadth_gate_goes_to_cash (test_aggressive_c_live.AggressiveCLiveTests.test_alpha_breadth_gate_goes_to_cash) ... ok
+test_alpha_selects_two_and_never_leverages (test_aggressive_c_live.AggressiveCLiveTests.test_alpha_selects_two_and_never_leverages) ... ok
+test_continuity_blocks_stale_deterioration (test_aggressive_c_live.AggressiveCLiveTests.test_continuity_blocks_stale_deterioration) ... ok
+test_cost_gate_rejects_tiny_edge (test_aggressive_c_live.AggressiveCLiveTests.test_cost_gate_rejects_tiny_edge) ... ok
+test_manual_alpha_sale_with_active_oco_is_reconciled (test_aggressive_c_live.AggressiveCLiveTests.test_manual_alpha_sale_with_active_oco_is_reconciled) ... 2026-10-28 18:29:36,246 [WARNING] Krypton.AggressiveC — Saldo Spot reduzido e reconciliado | BTCUSDT | tático -0.0000000000 | alpha -3.0000000000
+2026-10-28 18:29:36,246 [WARNING] Krypton.AggressiveC — Entrada externa de USDT reconciliada | 300.00
+ok
+test_manual_usdt_reduction_scales_cash_and_rebases_risk (test_aggressive_c_live.AggressiveCLiveTests.test_manual_usdt_reduction_scales_cash_and_rebases_risk) ... 2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Saída/redução externa de USDT reconciliada | -600.00
+2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Fluxo externo líquido reconciliado | total=-600.00 | tático=-330.00 | ativos_reduzidos=0.00
+ok
+test_profile_matches_promoted_c (test_aggressive_c_live.AggressiveCLiveTests.test_profile_matches_promoted_c) ... ok
+test_risk_manager_uses_c_override (test_aggressive_c_live.AggressiveCLiveTests.test_risk_manager_uses_c_override) ... 2026-10-28 18:29:36,247 [CRITICAL] Krypton.Risk — MAX DRAWDOWN | 31.00% >= 30.00% | HALT
+ok
+test_simultaneous_crypto_and_usdt_reduction_is_not_drawdown (test_aggressive_c_live.AggressiveCLiveTests.test_simultaneous_crypto_and_usdt_reduction_is_not_drawdown) ... 2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Saldo Spot reduzido e reconciliado | BTCUSDT | tático -2.0000000000 | alpha -3.0000000000
+2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Saída/redução externa de USDT reconciliada | -600.00
+2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Fluxo externo líquido reconciliado | total=-1100.00 | tático=-530.00 | ativos_reduzidos=500.00
+ok
+test_unclassified_manual_sale_reduces_both_sleeves_pro_rata (test_aggressive_c_live.AggressiveCLiveTests.test_unclassified_manual_sale_reduces_both_sleeves_pro_rata) ... 2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Saldo Spot reduzido e reconciliado | BTCUSDT | tático -2.0000000000 | alpha -3.0000000000
+2026-10-28 18:29:36,247 [WARNING] Krypton.AggressiveC — Entrada externa de USDT reconciliada | 500.00
+ok
+test_btc_on_confirmation_measures_two_of_three_breadth (test_cross_asset_diagnostics.CrossAssetDiagnosticsTests.test_btc_on_confirmation_measures_two_of_three_breadth) ... ok
+test_trend_efficiency_is_one_for_monotonic_path (test_cross_asset_diagnostics.CrossAssetDiagnosticsTests.test_trend_efficiency_is_one_for_monotonic_path) ... ok
+test_crossings_counts_state_changes_in_window (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_crossings_counts_state_changes_in_window) ... ok
+test_feature_comparison_computes_spearman_without_scipy (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_feature_comparison_computes_spearman_without_scipy) ... ok
+test_long_signal_age_and_drawdown_use_only_current_and_prior_bars (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_long_signal_age_and_drawdown_use_only_current_and_prior_bars) ... ok
+test_return_at_uses_only_prior_bars (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_return_at_uses_only_prior_bars) ... ok
+test_tp_sl_comparison_excludes_other_exits (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_tp_sl_comparison_excludes_other_exits) ... ok
+test_trade_history_flags_same_close_reentry_after_stop (test_entry_state_diagnostics.EntryStateDiagnosticsTests.test_trade_history_flags_same_close_reentry_after_stop) ... ok
+test_forensic_simulation_matches_research_simulation (test_forensic_diagnostics.ForensicDiagnosticsTests.test_forensic_simulation_matches_research_simulation) ... ok
+test_confirmed_manual_change_rebases_false_halt_without_deleting_state (test_live_controls.LiveControlTests.test_confirmed_manual_change_rebases_false_halt_without_deleting_state) ... 2026-10-28 18:29:36,285 [WARNING] Krypton.AggressiveC — Baseline de risco reparada após alteração manual confirmada | peak 2000.00 -> 1115.60 USDT
+ok
+test_decision_request_is_file_based_and_single_consumer (test_live_controls.LiveControlTests.test_decision_request_is_file_based_and_single_consumer) ... ok
+test_queue_is_idempotent (test_live_controls.LiveControlTests.test_queue_is_idempotent) ... ok
+test_balance_reads_spot_only (test_live_spot_controls.SpotOnlyAndManualControlTests.test_balance_reads_spot_only) ... ok
+test_manual_request_is_one_shot (test_live_spot_controls.SpotOnlyAndManualControlTests.test_manual_request_is_one_shot) ... ok
+test_order_quantities_are_fixed_point_strings (test_live_spot_controls.SpotOnlyAndManualControlTests.test_order_quantities_are_fixed_point_strings) ... 2026-10-28 18:29:36,286 [INFO] Krypton.Binance — LIMIT aceita pela Binance | BTCUSDT | order=1
+2026-10-28 18:29:36,286 [INFO] Krypton.Binance — OCO criada | BTCUSDT | qty 0.00000003 | TP 84874.69000000 | SL 73151.09000000
+ok
+test_calendar_periods (test_live_validation.LiveReplayTests.test_calendar_periods) ... ok
+test_completed_history_is_399_and_excludes_execution_day (test_live_validation.LiveReplayTests.test_completed_history_is_399_and_excludes_execution_day) ... ok
+test_default_still_quantizes_and_no_rounding_keeps_minimum_notional (test_live_validation.LiveReplayTests.test_default_still_quantizes_and_no_rounding_keeps_minimum_notional) ... ok
+test_future_prices_do_not_change_past_equity_or_orders (test_live_validation.LiveReplayTests.test_future_prices_do_not_change_past_equity_or_orders) ... 2026-10-28 18:29:36,297 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5500.00
+2026-10-28 18:29:36,412 [INFO] Krypton.AggressiveC — Alpha rebalance | target={'BTCUSDT': 0.6921576169002397, 'ETHUSDT': 0.0, 'SOLUSDT': 0.0, 'BNBUSDT': 0.3078423830997603} | gross=1.000
+2026-10-28 18:29:36,414 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BTCUSDT | qty=18.17760000 | entry=151.36066000
+2026-10-28 18:29:36,415 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BNBUSDT | qty=6.86063000 | entry=150.27646000
+2026-10-28 18:29:36,415 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-04 00:00:00+00:00 | equity=9987.58 | DD=0.12% | tactical=5494.33 | alpha=4493.26 | halted=False
+TEST solicitado. A instância live consumirá o pedido em até ~30 segundos.
+TEST solicitado. A instância live consumirá o pedido em até ~30 segundos.
+TEST solicitado. A instância live consumirá o pedido em até ~30 segundos.
+Replay 2024-02-05: 2024-02-05 equity=9995.87
+2026-10-28 18:29:36,416 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.59
+2026-10-28 18:29:36,511 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-05 00:00:00+00:00 | equity=9990.09 | DD=0.10% | tactical=5495.59 | alpha=4494.50 | halted=False
+2026-10-28 18:29:36,514 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.90
+2026-10-28 18:29:36,608 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-06 00:00:00+00:00 | equity=9990.54 | DD=0.09% | tactical=5495.90 | alpha=4494.63 | halted=False
+2026-10-28 18:29:36,623 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5500.00
+2026-10-28 18:29:36,719 [INFO] Krypton.AggressiveC — Alpha rebalance | target={'BTCUSDT': 0.6921576169002397, 'ETHUSDT': 0.0, 'SOLUSDT': 0.0, 'BNBUSDT': 0.3078423830997603} | gross=1.000
+2026-10-28 18:29:36,720 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BTCUSDT | qty=18.17760000 | entry=151.36066000
+2026-10-28 18:29:36,721 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BNBUSDT | qty=6.86063000 | entry=150.27646000
+2026-10-28 18:29:36,721 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-04 00:00:00+00:00 | equity=9987.58 | DD=0.12% | tactical=5494.33 | alpha=4493.26 | halted=False
+Replay 2024-02-05: 2024-02-05 equity=9995.87
+2026-10-28 18:29:36,722 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.59
+2026-10-28 18:29:36,811 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-05 00:00:00+00:00 | equity=9990.09 | DD=0.10% | tactical=5495.59 | alpha=4494.50 | halted=False
+2026-10-28 18:29:36,812 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.90
+2026-10-28 18:29:36,902 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-06 00:00:00+00:00 | equity=9990.54 | DD=0.09% | tactical=5495.90 | alpha=4494.63 | halted=False
+ok
+test_live_signal_price_gate (test_live_validation.LiveReplayTests.test_live_signal_price_gate) ... ok
+test_missing_data_is_an_error (test_live_validation.LiveReplayTests.test_missing_data_is_an_error) ... ok
+test_no_rounding_preserves_fill_quantity_and_oco_prices (test_live_validation.LiveReplayTests.test_no_rounding_preserves_fill_quantity_and_oco_prices) ... ok
+test_oco_double_touch_chooses_stop_and_gap_uses_open (test_live_validation.LiveReplayTests.test_oco_double_touch_chooses_stop_and_gap_uses_open) ... ok
+test_replay_calls_actual_live_daily_cycle_and_never_constructs_client (test_live_validation.LiveReplayTests.test_replay_calls_actual_live_daily_cycle_and_never_constructs_client) ... 2026-10-28 18:29:36,917 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5500.00
+2026-10-28 18:29:37,010 [INFO] Krypton.AggressiveC — Alpha rebalance | target={'BTCUSDT': 0.6921576169002397, 'ETHUSDT': 0.0, 'SOLUSDT': 0.0, 'BNBUSDT': 0.3078423830997603} | gross=1.000
+2026-10-28 18:29:37,011 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BTCUSDT | qty=18.17760000 | entry=151.36066000
+2026-10-28 18:29:37,013 [INFO] Krypton.AggressiveC — Aggressive C tactical BUY | BNBUSDT | qty=6.86063000 | entry=150.27646000
+2026-10-28 18:29:37,013 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-04 00:00:00+00:00 | equity=9987.58 | DD=0.12% | tactical=5494.33 | alpha=4493.26 | halted=False
+Replay 2024-02-05: 2024-02-05 equity=9995.87
+2026-10-28 18:29:37,014 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.59
+2026-10-28 18:29:37,103 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-05 00:00:00+00:00 | equity=9990.09 | DD=0.10% | tactical=5495.59 | alpha=4494.50 | halted=False
+2026-10-28 18:29:37,104 [INFO] Krypton.Risk — Reset diário UTC | Capital: $5495.90
+2026-10-28 18:29:37,192 [INFO] Krypton.AggressiveC — Aggressive C cycle | signal=2024-02-06 00:00:00+00:00 | equity=9990.54 | DD=0.09% | tactical=5495.90 | alpha=4494.63 | halted=False
+ok
+test_runtime_reconciliation_failure_halts_instead_of_fabricating_trades (test_live_validation.LiveReplayTests.test_runtime_reconciliation_failure_halts_instead_of_fabricating_trades) ... Replay 2024-02-05: 2024-02-05 equity=10000.00
+ok
+test_walk_forward_includes_initial_cost_and_partial_last_fold (test_live_validation.LiveReplayTests.test_walk_forward_includes_initial_cost_and_partial_last_fold) ... ok
+test_classify_period (test_regime_diagnostics.RegimeDiagnosticsTests.test_classify_period) ... ok
+test_exposure_ratio (test_regime_diagnostics.RegimeDiagnosticsTests.test_exposure_ratio) ... ok
+test_invalid_thresholds (test_regime_diagnostics.RegimeDiagnosticsTests.test_invalid_thresholds) ... ok
+test_choose_regime_prefers_concentration_clean_pool (test_research_metrics.ResearchMetricsTests.test_choose_regime_prefers_concentration_clean_pool) ... ok
+test_choose_regime_warns_but_does_not_hard_reject_concentration (test_research_metrics.ResearchMetricsTests.test_choose_regime_warns_but_does_not_hard_reject_concentration) ... ok
+test_concentration_metrics_remove_best_trade_and_blocks (test_research_metrics.ResearchMetricsTests.test_concentration_metrics_remove_best_trade_and_blocks) ... ok
+test_dsr_is_probability (test_research_metrics.ResearchMetricsTests.test_dsr_is_probability) ... ok
+test_top5_share_is_nan_when_total_pnl_is_nonpositive (test_research_metrics.ResearchMetricsTests.test_top5_share_is_nan_when_total_pnl_is_nonpositive) ... ok
+test_white_reality_check_is_deterministic (test_research_metrics.ResearchMetricsTests.test_white_reality_check_is_deterministic) ... ok
+test_continuous_oos_curve_keeps_calendar_gap (test_simulation.SimulationTests.test_continuous_oos_curve_keeps_calendar_gap) ... ok
+test_diagnostics_do_not_change_simulation_result (test_simulation.SimulationTests.test_diagnostics_do_not_change_simulation_result) ... ok
+test_market_audit_counts_missing_days (test_simulation.SimulationTests.test_market_audit_counts_missing_days) ... ok
+test_open_kline_is_removed (test_simulation.SimulationTests.test_open_kline_is_removed) ... ok
+test_portfolio_block_bootstrap_is_finite (test_simulation.SimulationTests.test_portfolio_block_bootstrap_is_finite) ... ok
+test_position_sizing_respects_weight_and_cash (test_simulation.SimulationTests.test_position_sizing_respects_weight_and_cash) ... ok
+test_signal_exit_at_open_precedes_intraday_stop (test_simulation.SimulationTests.test_signal_exit_at_open_precedes_intraday_stop) ... ok
+test_signal_funnel_explains_regime_blocks (test_simulation.SimulationTests.test_signal_funnel_explains_regime_blocks) ... ok
+test_stop_gap_fills_near_open_not_at_stop (test_simulation.SimulationTests.test_stop_gap_fills_near_open_not_at_stop) ... ok
+test_auth_and_tenant_isolation (test_telemetry.TelemetryTests.test_auth_and_tenant_isolation) ... ok
+test_return_uses_first_and_latest_snapshot (test_telemetry.TelemetryTests.test_return_uses_first_and_latest_snapshot) ... ok
+
+----------------------------------------------------------------------
+Ran 56 tests in 1.373s
+
+OK
