@@ -285,9 +285,9 @@ def run_variant(params, idx, p, btc_sma):
     m = {"variant": name, "train":measure(equity, START_TEST, SPLIT),
          "holdout":measure(equity, SPLIT, END_EXCLUSIVE),
          "overall":measure(equity, START_TEST, END_EXCLUSIVE),
-         "trade_count_closed":trade_n,
+         "trade_count_closed":trade_n,\n         "trade_count_train":sum(pd.Timestamp(t["exit_t"])<pd.Timestamp(SPLIT,tz="UTC") for t in trades),
          "win_pct":100*sum(t["pnl"]>0 for t in trades)/len(trades) if trades else None,
-         "profit_factor":(sum(max(0,t["pnl"]) for t in trades)/abs(sum(min(0,t["pnl"]) for t in trades)) if sum(min(0,t["pnl"]) for t in trades)<0 else None,
+         "profit_factor":(sum(max(0,t["pnl"]) for t in trades)/abs(sum(min(0,t["pnl"]) for t in trades)) if sum(min(0,t["pnl"]) for t in trades)<0 else None),
          "fees_paid_usdt":fee_total,
          "global_halted":halted,
          "open_positions_end":len(openpos),
@@ -309,7 +309,7 @@ def main():
         print(f"TIMING {params[0]} {time.time()-start:.2f}s",flush=True)
     # Ranking based only on 2021–2024; 2025–2026 remains holdout.
     candidates=[m for m in summaries if m["train"] and
-                m["train"]["maxdd_pct"]>=-22 and m["trade_count_closed"]>=30 and m["train"]["return_pct"]>0]
+                m["train"]["maxdd_pct"]>=-22 and m["trade_count_train"]>=30 and m["train"]["return_pct"]>0]
     # Conservative selection prefers CAGR adjusted for drawdown.
     ranked=sorted(candidates,key=lambda x:(x["train"]["cagr_pct"]/(1+abs(x["train"]["maxdd_pct"])),
                                          x["train"]["cagr_pct"]),reverse=True)
