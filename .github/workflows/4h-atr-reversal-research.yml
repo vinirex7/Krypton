@@ -24,6 +24,7 @@ jobs:
         run: |
           set -o pipefail
           python research_4h_atr_reversal.py | tee 4h_research_output.txt
+          python research_4h_stress.py | tee 4h_stress_output.txt
       - name: Upload complete evidence and comparative results
         if: always()
         uses: actions/upload-artifact@v4
@@ -31,6 +32,10 @@ jobs:
           name: krypton-4h-atr-reversal-study
           path: |
             4h_research_output.txt
+            4h_stress_output.txt
+            results/4h_study/risk_sweep_summary.json
+            results/4h_study/risk_sweep_summary.csv
+            results/4h_study/robustness.json
             results/4h_study/summary.json
             results/4h_study/summary.csv
             results/4h_study/*_trades.csv
