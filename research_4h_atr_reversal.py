@@ -20,7 +20,7 @@ from indicators import (compute_atr, compute_signals, compute_supertrend,
                         compute_rsi, compute_macd)
 
 SOURCE = "https://data-api.binance.vision/api/v3/klines"
-START_DATA = "2020-08-01"
+START_DATA = "2020-09-01"
 START_TEST = "2021-01-01"
 SPLIT = "2025-01-01"
 END_EXCLUSIVE = "2026-10-28"
