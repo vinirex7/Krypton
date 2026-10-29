@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  4h-comparison:
+  compare_4h:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
