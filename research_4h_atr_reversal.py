@@ -171,7 +171,7 @@ def measure(series, start, end_excl):
             "start_equity": baseline, "end_equity": ending, "bars": len(within)}
 
 
-def run_variant(params, idx, p, btc_sma):
+def run_variant(params, idx, p, btc_sma, risk_per_entry=RISK):
     name, tp_atr, rev_mode, special = params
     cash = INITIAL
     openpos, trades, eqrows = {}, [], []
@@ -232,7 +232,7 @@ def run_variant(params, idx, p, btc_sma):
                 if entry <= 0 or abs(entry / signal_close-1)>0.005:
                     continue
                 current_eq = portfolio_price(i, "o")
-                qty = min(RISK*current_eq/(2*av),
+                qty = min(risk_per_entry*current_eq/(2*av),
                           current_eq*float(TRADING_PAIRS[sym])/entry,
                           cash/((1+FEE_RATE)*entry))
                 if qty*entry < 5.0:
@@ -282,7 +282,7 @@ def run_variant(params, idx, p, btc_sma):
         eqrows.append((stamp,eq))
 
     equity = pd.Series({a:b for a,b in eqrows}, dtype=float).sort_index()
-    m = {"variant": name, "train":measure(equity, START_TEST, SPLIT),
+    m = {"variant": name, "risk_pct": risk_per_entry*100, "train":measure(equity, START_TEST, SPLIT),
          "holdout":measure(equity, SPLIT, END_EXCLUSIVE),
          "overall":measure(equity, START_TEST, END_EXCLUSIVE),
          "trade_count_closed":trade_n,
@@ -332,6 +332,58 @@ def main():
     pd.json_normalize(summaries).to_csv(OUT/"summary.csv",index=False)
     print("TRAIN_SELECTED",result["chosen_using_train_only"],flush=True)
     print("COMPLETED",len(summaries),"VARIANTS",flush=True)
+
+    # Predesignated robustness sweep: all selection decisions use TRAIN only.
+    sweep_design = [
+        ("TP3_full",3.0,"signal",None),
+        ("TP5_full",5.0,"signal",None),
+        ("REV_no_tp",None,"signal",None),
+        ("HALF2_rev",2.0,"signal","half"),
+        ("HALF3_rev",3.0,"signal","half"),
+        ("HALF4_rev",4.0,"signal","half"),
+        ("HALF5_rev",5.0,"signal","half"),
+        ("TRAIL3_rev",None,"signal","trail3"),
+    ]
+    risk_grid = (0.005,0.0075,0.01,0.0125,0.015,0.02)
+    sweep=[]
+    for risk in risk_grid:
+        for base in sweep_design:
+            params=(base[0]+f"_risk{100*risk:.2f}pct",*base[1:])
+            m,eq,trades = run_variant(params,idx,packs,btc_sma,risk_per_entry=risk)
+            sweep.append(m)
+            print("SWEEP_RESULT "+json.dumps(m,allow_nan=False),flush=True)
+    passed=[m for m in sweep if m["train"]
+            and m["train"]["maxdd_pct"]>=-22.0
+            and m["train"]["return_pct"]>0.0
+            and m["trade_count_train"]>=30
+            and not (m["global_halted"] and m["holdout"]["return_pct"]==0.0)]
+    # The last requirement rejects strategies halted in training or later;
+    # it is an ex-post risk diagnostic and is NOT used to rank candidates.
+    # Recompute selection without testing future state: train bounds alone.
+    passed=[m for m in sweep if m["train"]
+            and m["train"]["maxdd_pct"]>=-22.0
+            and m["train"]["return_pct"]>0.0
+            and m["trade_count_train"]>=30]
+    ranked=sorted(passed,key=lambda x:(x["train"]["cagr_pct"]/
+            (1.0+abs(x["train"]["maxdd_pct"])),x["train"]["cagr_pct"]),reverse=True)
+    chosen=ranked[0] if ranked else None
+    sweep_report={
+       "risk_grid_pct":[100*r for r in risk_grid],
+       "train_period":[START_TEST,SPLIT],
+       "holdout_period":[SPLIT,END_EXCLUSIVE],
+       "train_maxdd_limit_pct":-22.0,
+       "selection_uses_holdout":False,
+       "selection_criterion":"train CAGR / (1 + abs(train maxdd in percentage points)); train positive return and >=30 closed trades",
+       "chosen_train_only":chosen["variant"] if chosen else None,
+       "chosen_candidate":chosen,
+       "candidates_passing_train_constraints":len(ranked),
+       "rows":sweep,
+    }
+    (OUT/"risk_sweep_summary.json").write_text(json.dumps(sweep_report,indent=2,allow_nan=False),encoding="utf-8")
+    pd.json_normalize(sweep).to_csv(OUT/"risk_sweep_summary.csv",index=False)
+    print("RISK_SWEEP_SELECTED "+json.dumps(chosen,allow_nan=False) if chosen else "RISK_SWEEP_SELECTED NONE",flush=True)
+    print("RISK_SWEEP_DONE",len(sweep),"configs",len(ranked),"pass train",flush=True)
+
 
 
 if __name__=="__main__":
