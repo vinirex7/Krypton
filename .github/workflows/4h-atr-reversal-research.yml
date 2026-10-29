@@ -1,0 +1,38 @@
+name: Krypton 4H ATR vs reversal research
+on:
+  push:
+    branches:
+      - research/4h-atr-reversal-study-20261028
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  4h-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install exact repository dependencies
+        run: pip install -r requirements.txt
+      - name: Download and validate Binance Spot 4H data; run comparison
+        shell: bash
+        run: |
+          set -o pipefail
+          python research_4h_atr_reversal.py | tee 4h_research_output.txt
+      - name: Upload complete evidence and comparative results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: krypton-4h-atr-reversal-study
+          path: |
+            4h_research_output.txt
+            results/4h_study/summary.json
+            results/4h_study/summary.csv
+            results/4h_study/*_trades.csv
+            results/4h_study/*_equity.csv
+          if-no-files-found: warn
