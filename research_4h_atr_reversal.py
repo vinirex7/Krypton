@@ -80,7 +80,7 @@ def fetch_symbol(symbol):
             "volume": arr[:, 5].astype(float),
         }, index=pd.to_datetime(arr[:, 0].astype("int64"), unit="ms", utc=True))
         df.to_csv(path, float_format="%.12f")
-    expected = pd.date_range(start=START_DATA, end=millis_to_ts(millis(END_EXCLUSIVE) - 4*3600000), freq="4h", tz="UTC")
+    expected = pd.date_range(start=pd.Timestamp(START_DATA, tz="UTC"), end=millis_to_ts(millis(END_EXCLUSIVE) - 4*3600000), freq="4h")
     if not df.index.equals(expected):
         raise ValueError(f"{symbol} noncontiguous 4H coverage: got {len(df)}, expected {len(expected)}; first={df.index.min()}, last={df.index.max()}")
     ohlc = df[["open", "high", "low", "close"]]
