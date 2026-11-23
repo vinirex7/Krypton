@@ -1,0 +1,2 @@
+# Krypton
+Tradingbot de BTC.
