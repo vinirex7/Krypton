@@ -20,6 +20,7 @@ class BinanceError(RuntimeError):
     def __init__(self, status, code, message):
         super().__init__(f"Binance HTTP {status} / {code}: {message}")
         self.code = code
+        self.status = status
 
 
 class Client:

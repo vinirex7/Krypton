@@ -69,3 +69,17 @@ python verify_history.py /caminho/Krypton_Dados_Reproducao
 | Desde 01/01/2024 | Dobrados | 115 | +23,36% | 19,72% |
 
 O replay usa comissão de 0,05% e slippage de 0,02% por lado no cenário-base, funding histórico, preços OHLC e a convenção de stop primeiro quando duas barreiras são tocadas na mesma vela. A conta real usa preços de preenchimento, taxas efetivas, latência e filtros da Binance. O executor inicializa os indicadores com até 1.500 candles recentes. O replay usa a série integral. A taxa de funding e as oscilações entre leituras podem gerar pequenas diferenças na avaliação do patrimônio. O resultado histórico ainda requer validação prospectiva.
+
+### Reinício automático no macOS (demo)
+
+Com o processo demo anterior parado, use o mesmo diretório de estado SQLite.
+Se ele estiver fora de `var` na pasta do projeto, exporte `KRYPTON_STATE_DIR`
+com o caminho absoluto antes de instalar. No arquivo privado
+`~/.krypton-demo.env` coloque as atribuições shell de `KRYPTON_DEMO_KEY` e
+`KRYPTON_DEMO_SECRET` e aplique `chmod 600 ~/.krypton-demo.env`.
+No ambiente Python do Krypton execute `python install_macos_demo.py`.
+O serviço inicia imediatamente, volta após encerramento e carrega no login.
+O Mac precisa estar acordado. Consulte `demo.log` no diretório de estado.
+Para parar e remover, execute
+`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.krypton.demo.plist`
+e remova esse plist. Divergências de posição ou ordens exigem conferência.

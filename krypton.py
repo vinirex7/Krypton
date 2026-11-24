@@ -1,6 +1,7 @@
 """Run with python krypton.py signal|demo|live (Linux or macOS)."""
 import argparse
 import fcntl
+from http.client import IncompleteRead
 import hashlib
 import json
 import logging
@@ -216,6 +217,35 @@ class Runner:
         LOG.info("Entry %s %s %s", trade["id"], module, order["status"])
 
 
+def startup(api, state):
+    api.now()
+    if str(api.signed("GET", "v1/positionSide/dual")["dualSidePosition"]).lower() != "false":
+        raise RuntimeError("Select One-way Mode for this account")
+    if str(api.signed("GET", "v1/multiAssetsMargin")["multiAssetsMargin"]).lower() != "false":
+        raise RuntimeError("Select Single-Asset Mode")
+    config = api.symbol("GET", "v1/symbolConfig")[0]
+    if int(config["leverage"]) != 2:
+        raise RuntimeError("Set BTCUSDT leverage to 2x")
+    return Runner(api, state)
+
+
+NETWORK_ERRORS = (URLError, TimeoutError, ConnectionError, IncompleteRead)
+CYCLE_ERRORS = NETWORK_ERRORS + (BinanceError, ValueError)
+
+
+def reconnect(api, state):
+    while True:
+        try:
+            return startup(api, state)
+        except NETWORK_ERRORS as exc:
+            LOG.warning("Waiting for Binance: %s", exc)
+        except BinanceError as exc:
+            if exc.status < 500 and exc.status not in (418, 429):
+                raise
+            LOG.warning("Binance unavailable: %s", exc)
+        time.sleep(15)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["signal","demo","live"], default="signal", nargs="?")
@@ -230,25 +260,17 @@ def main():
     prefix = "KRYPTON_" + args.mode.upper()
     key, secret = os.environ[prefix+"_KEY"], os.environ[prefix+"_SECRET"]
     api = Client(args.mode, key, secret)
-    api.now()
-    if str(api.signed("GET", "v1/positionSide/dual")["dualSidePosition"]).lower() != "false":
-        parser.error("Select One-way Mode for this account")
-    if str(api.signed("GET", "v1/multiAssetsMargin")["multiAssetsMargin"]).lower() != "false":
-        parser.error("Select Single-Asset Mode")
-    config = api.symbol("GET", "v1/symbolConfig")[0]
-    if int(config["leverage"]) != 2:
-        parser.error("Set BTCUSDT leverage to 2x")
     root = Path(os.environ.get("KRYPTON_STATE_DIR", "var")).resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     # One persistent state per dedicated account and environment, preserved on key rotation.
     with (root/(args.mode+".lock")).open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with closing(sqlite3.connect(root/(args.mode+".sqlite"))) as db:
-            runner = Runner(api, State(db))
+            runner = reconnect(api, State(db))
             while True:
                 try:
                     runner.tick()
-                except (BinanceError, URLError, TimeoutError, ValueError) as exc:
+                except CYCLE_ERRORS as exc:
                     LOG.error("Cycle deferred: %s", exc)
                 time.sleep(3)
 
