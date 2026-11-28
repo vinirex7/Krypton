@@ -1,4 +1,4 @@
-"""K1316 on Binance BTCUSDT perpetual, using 4-hour contract candles."""
+"""KSO1316 and KSL1 on Binance BTCUSDT perpetual, using 4-hour contract candles."""
 from decimal import Decimal, ROUND_FLOOR
 
 import numpy as np
@@ -27,7 +27,12 @@ def indicators(bars, funding):
     squeeze = bear & narrow & (close < mid - band)
     candle = ((bars.open - close > atr) & (close - bars.low < .15 * (bars.high - bars.low))
               & (close > ema200))
-    return pd.DataFrame({"atr": atr, "funding": crowd, "squeeze": squeeze, "candle": candle})
+    bull = (close > ema200) & (ema50 > ema200) & (ema200 > ema200.shift(30))
+    # A sharp reversal above EMA200 is also eligible for the original candle short.
+    reversal = (close < ema21) & (ema21 < ema21.shift())
+    breakout = close > bars.high.shift().rolling(55).max()
+    return pd.DataFrame({"bull": bull, "short_regime": bear | reversal,
+                         "breakout": breakout, "atr": atr, "funding": crowd, "squeeze": squeeze, "candle": candle})
 
 
 def entry(closed):
@@ -39,15 +44,32 @@ def entry(closed):
     return None
 
 
-def quantity(equity, peak, price, atr):
+def select_entry(closed, strategy):
+    if strategy == "KSO1316":
+        return entry(closed)
+    if strategy not in ("KSL1", "KSL2"):
+        raise ValueError("Unknown strategy")
+    latest = closed.iloc[-1]
+    if strategy == "KSL2" or latest.short_regime:
+        short = entry(closed)
+        if short:
+            return short
+    if latest.bull and latest.breakout:
+        return "long_breakout", D(str(latest.atr))
+    return None
+
+
+def quantity(equity, peak, price, atr, risk=D(".03")):
     if equity <= 0 or price <= 0 or atr <= 0 or peak < equity:
         raise ValueError("Invalid equity, peak, entry price or ATR")
     dd = 1 - equity / peak
     fraction = D("1") if dd < D(".15") else D(".5") if dd < D(".25") else D(".25") if dd < D(".35") else D("0")
-    return min(2 * equity / price, equity * D(".03") * fraction / (D("2.5") * atr))
+    return min(2 * equity / price, equity * risk * fraction / (D("2.5") * atr))
 
 
 def exits(module, sale, atr, trough=None, prior_atr=None):
+    if module == "long_breakout":
+        return sale - D("2.5") * atr, sale + 6 * atr
     stop = sale + D("2.5") * atr
     target = sale - 3 * atr if module == "funding" else None
     if module == "squeeze" and trough is not None:
@@ -56,7 +78,7 @@ def exits(module, sale, atr, trough=None, prior_atr=None):
 
 
 def due(module, opened, bar):
-    lifetime = {"funding": 30, "candle": 12}.get(module)
+    lifetime = {"funding": 30, "candle": 12, "long_breakout": 60}.get(module)
     return lifetime is not None and bar >= opened + lifetime * BAR
 
 

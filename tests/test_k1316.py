@@ -4,9 +4,9 @@ from unittest.mock import Mock
 
 import pandas as pd
 
-from binance_usdm import BinanceError
+from binance_usdm import BinanceError, Client
 from krypton import Runner, State
-from strategy import BAR, D, entry, exits, due, quantity
+from strategy import select_entry, BAR, D, entry, exits, due, quantity
 
 
 class Rules(unittest.TestCase):
@@ -16,6 +16,21 @@ class Rules(unittest.TestCase):
         self.assertEqual(entry(data), ("funding", D(100)))
         data.loc[0, ["funding","squeeze","candle"]] = False
         self.assertIsNone(entry(data))
+
+    def test_router_respects_confirmation_and_short_priority(self):
+        data = pd.DataFrame({"atr": [2, 3], "candle": [True, False], "funding": False,
+                             "squeeze": False, "bull": True, "breakout": True, "short_regime": False})
+        self.assertEqual(select_entry(data, "KSL1"), ("long_breakout", D(3)))
+        self.assertEqual(select_entry(data, "KSL2"), ("candle", D(2)))
+        data.loc[1, ["bull", "breakout"]] = False
+        self.assertIsNone(select_entry(data, "KSL1"))
+        data.loc[1, "short_regime"] = True
+        self.assertEqual(select_entry(data, "KSL1"), ("candle", D(2)))
+
+    def test_long_exit(self):
+        self.assertEqual(exits("long_breakout", D(100), D(2)), (95, 112))
+        self.assertFalse(due("long_breakout", 0, 59*BAR))
+        self.assertTrue(due("long_breakout", 0, 60*BAR))
 
     def test_risk_brakes(self):
         for balance, unit in [(100,1),(85,.5),(75,.25),(65,0)]:
@@ -34,7 +49,9 @@ class Rules(unittest.TestCase):
 
 class Execution(unittest.TestCase):
     def setUp(self):
-        self.api = Mock()
+        self.api = Client("demo")
+        for method in ("filters", "now", "position", "price", "symbol", "signed"):
+            setattr(self.api, method, Mock())
         self.api.filters.return_value = {"PRICE_FILTER":{"tickSize":"0.1"},
                 "LOT_SIZE":{"minQty":".001","maxQty":"1000","stepSize":".001"},
                 "MARKET_LOT_SIZE":{"minQty":".001","maxQty":"1000","stepSize":".001"},
@@ -68,6 +85,20 @@ class Execution(unittest.TestCase):
                 raise BinanceError(400,-2021,"Would trigger")
             return {}
         self.api.symbol.side_effect = call
+
+    def test_binance_long_uses_buy_and_protective_sells(self):
+        self.bot.strategy = "KSL2"
+        frame = self.bot.market.return_value[1]
+        frame["funding"] = False
+        frame["short_regime"] = False
+        frame["bull"] = frame["breakout"] = True
+        self.api.symbol.side_effect = [[], [], {"status": "FILLED", "executedQty": ".133",
+                                                "avgPrice": "100"}, {}, {}]
+        self.bot.tick()
+        orders = [call.kwargs for call in self.api.symbol.call_args_list if call.args[0] == "POST"]
+        self.assertEqual([order["side"] for order in orders], ["BUY", "SELL", "SELL"])
+        self.assertEqual([D(order["triggerPrice"]) for order in orders[1:]], [D("92.5"), D(118)])
+        self.assertTrue(all(order["closePosition"] == "true" for order in orders[1:]))
 
     def test_native_bracket_and_no_duplicate(self):
         self.bot.tick()
@@ -113,6 +144,23 @@ class Execution(unittest.TestCase):
         self.bot.protect(trade,D("-0.2"),D(100),self.bar,[])
         self.assertEqual(self.calls[0][2]["quantity"],"0.2")
         self.assertEqual(self.calls[0][2]["reduceOnly"],"true")
+
+    def test_ambiguous_time_exit_consumes_opening_after_restart(self):
+        trade = {"id": "KSL2-L-1", "bar": self.bar-60*BAR, "module": "long_breakout",
+                 "atr": "2", "confirmed": True, "qty": "1"}
+        self.state.data["trade"] = trade
+        self.bot.strategy = "KSL2"
+        self.api.position.return_value = (D(1), D(100))
+        self.api.close_position = Mock(side_effect=TimeoutError)
+        with self.assertRaises(TimeoutError):
+            self.bot.tick()
+        self.api.position.return_value = (D(0), D(0))
+        restarted = Runner(self.api, State(self.db), "KSL2")
+        restarted.record_equity = self.bot.record_equity
+        restarted.market = Mock(side_effect=AssertionError("second entry at a consumed opening"))
+        restarted.tick()
+        self.assertIsNone(restarted.state.data["trade"])
+        self.assertEqual(restarted.state.data["seen"], self.bar)
 
     def test_skips_stale_entry_and_foreign_position(self):
         self.api.now.return_value = self.bar+60_000
